@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1976d2">
+<meta name="description" content="状态巡检记录 - 设置">
+<title>设置</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="状态记录">
+<meta name="format-detection" content="telephone=no">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+
+<style>
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+  }
+  textarea, input, select { -webkit-appearance: none; appearance: none; }
+</style>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .settings-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .back-btn {
+    font-size: 22px;
+    padding: 4px 10px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 8px;
+    color: #fff;
+  }
+  .back-btn:active { background: rgba(255,255,255,0.3); }
+  .range-display {
+    font-size: 12px;
+    color: #888;
+    margin-top: 4px;
+  }
+  .import-export textarea {
+    width: 100%;
+    min-height: 80px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 8px;
+    font-size: 12px;
+    font-family: monospace;
+    margin-top: 8px;
+    resize: vertical;
+  }
+  .count-badge {
+    display: inline-block;
+    background: #e3f2fd;
+    color: #1976d2;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    margin-left: 6px;
+  }
+</style>
+</head>
+<body>
+<header class="app-header">
+  <div class="settings-header">
+    <button id="btn-back" class="back-btn">←</button>
+    <h1>设置</h1>
+  </div>
+</header>
+
+<div class="settings-container">
+
+  <!-- Live Clock Section -->
+  <section class="settings-section">
+    <h2>🕐 当前时间 (GMT)</h2>
+    <div class="clock-row">
+      <div class="clock-display" id="clock-display">--:--:--</div>
+      <button type="button" id="btn-clock-edit" class="btn btn-sm" title="修改时间">✏️ 编辑</button>
+      <button type="button" id="btn-clock-refresh" class="btn btn-sm" title="刷新为实时时间">↻ 刷新</button>
+    </div>
+    <div class="clock-edit-row hidden" id="clock-edit-row">
+      <label>GMT 日期</label>
+      <input type="date" id="clock-edit-date">
+      <label>GMT 时间</label>
+      <input type="time" id="clock-edit-time" step="1">
+      <button type="button" id="btn-clock-apply" class="btn btn-sm btn-primary">应用</button>
+      <button type="button" id="btn-clock-cancel" class="btn btn-sm">取消</button>
+    </div>
+    <div class="range-display" id="clock-mode-hint">实时时间模式</div>
+  </section>
+
+  <!-- Highlight Color -->
+  <section class="settings-section">
+    <h2>🎨 异常高亮</h2>
+    <div class="settings-row">
+      <label for="highlight-color">异常记录高亮色</label>
+      <input type="color" id="highlight-color" value="#ffeb3b">
+    </div>
+    <div class="settings-row">
+      <label for="time-range">时间容差 (分钟)</label>
+      <input type="number" id="time-range" min="0" max="120" value="30" style="max-width:80px;">
+    </div>
+    <div class="range-display">填入时间距所在小时范围超过容差时，将以高亮色标注该行的所有填入内容。</div>
+    <div class="settings-row" style="margin-top:10px;">
+      <label for="enable-highlight">启用到期异常标注</label>
+      <label class="switch">
+        <input type="checkbox" id="enable-highlight" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+  </section>
+
+  <!-- Reminder Settings -->
+  <section class="settings-section">
+    <h2>🔔 提醒设置</h2>
+    <div class="settings-row">
+      <label for="enable-reminder">启用整点提醒</label>
+      <label class="switch">
+        <input type="checkbox" id="enable-reminder" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="settings-row">
+      <label>提醒安静时段</label>
+      <div class="settings-range-row">
+        <select id="quiet-start"></select>
+        <span>至</span>
+        <select id="quiet-end"></select>
+      </div>
+    </div>
+    <div class="settings-row">
+      <label for="enable-browser-notify">浏览器系统通知</label>
+      <label class="switch">
+        <input type="checkbox" id="enable-browser-notify">
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="range-display">开启后，当某整点未填写状态时，会在页面显示提醒横幅，并可选发送系统通知。</div>
+    <div class="settings-row" style="margin-top:10px;">
+      <label for="pdf-title">PDF导出标题</label>
+      <input type="text" id="pdf-title" placeholder="状态巡检记录" style="max-width:160px;">
+    </div>
+  </section>
+
+  <!-- One-Click Preset -->
+  <section class="settings-section">
+    <h2>⚡ 一键打卡预设</h2>
+    <div class="settings-row">
+      <label for="one-click-name">按钮名称</label>
+      <input type="text" id="one-click-name" placeholder="一键打卡" style="max-width:160px;">
+    </div>
+    <div class="settings-row">
+      <label>默认填入状态</label>
+      <div class="preset-status-opts">
+        <button type="button" class="preset-status-btn" data-status="✓"><span class="opt-icon status-checked">✓</span> 打勾</button>
+        <button type="button" class="preset-status-btn" data-status="✗"><span class="opt-icon status-crossed">✗</span> 打叉</button>
+      </div>
+    </div>
+    <div class="preset-targets-section">
+      <label class="preset-targets-label">填入对象（勾选要包含的项目）</label>
+      <div id="preset-target-list" class="preset-target-list"></div>
+      <div class="preset-actions">
+        <button type="button" id="preset-select-all" class="btn btn-sm">全选</button>
+        <button type="button" id="preset-select-none" class="btn btn-sm">全不选</button>
+      </div>
+    </div>
+    <div class="range-display">设置后，主页一键打卡按钮将按此预设填入选定的对象和状态。预设会自动保存。</div>
+  </section>
+
+  <!-- Check Content (Parents) -->
+  <section class="settings-section">
+    <h2>📝 检查内容 <span class="count-badge" id="parent-count">0</span></h2>
+    <div id="parent-list" class="parent-list"></div>
+    <button id="btn-add-parent" class="btn btn-sm btn-block">+ 添加检查内容</button>
+    <div class="range-display">检查内容将显示在表格顶部，作为各列的父级标题。</div>
+  </section>
+
+  <!-- Platform & Device Management -->
+  <section class="settings-section">
+    <h2>📋 平台及设备管理 <span class="count-badge" id="cat-count">0</span></h2>
+    <div id="category-list" class="category-list"></div>
+    <button id="btn-add-category" class="btn btn-primary btn-block">+ 添加新类别</button>
+  </section>
+
+  <!-- Data Management -->
+  <section class="settings-section import-export">
+    <h2>💾 数据管理</h2>
+    <div class="settings-row">
+      <label>导出全部数据</label>
+      <button id="btn-export" class="btn btn-sm">导出</button>
+    </div>
+    <textarea id="export-output" placeholder="导出的 JSON 数据将显示在这里..."></textarea>
+    <div class="settings-row" style="margin-top:10px;">
+      <label>导入数据 (JSON)</label>
+      <button id="btn-import" class="btn btn-sm">导入</button>
+    </div>
+    <textarea id="import-input" placeholder="粘贴 JSON 数据..."></textarea>
+    <div class="settings-row" style="margin-top:10px;">
+      <label>清除全部数据 (包含所有日期的记录)</label>
+      <button id="btn-clear-all" class="btn btn-sm danger">清除全部</button>
+    </div>
+  </section>
+
+</div>
+
+<!-- Dialog -->
+<div id="action-dialog" class="dialog-overlay hidden">
+  <div class="dialog">
+    <h3 id="dialog-title">确认</h3>
+    <p id="dialog-message">确定要执行此操作吗？</p>
+    <div class="dialog-actions">
+      <button id="dialog-cancel" class="btn btn-secondary">取消</button>
+      <button id="dialog-confirm" class="btn btn-danger">确认</button>
+    </div>
+  </div>
+</div>
+
+<script src="settings.js"></script>
+
+<!-- iOS PWA standalone 模式下保持站内跳转不跳出到 Safari -->
+<script>
+if (('standalone' in window.navigator) && window.navigator.standalone) {
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a');
+    if (!a || !a.getAttribute('href')) return;
+    var href = a.getAttribute('href');
+    if (href.indexOf('://') === -1 && !href.startsWith('#') && !a.target) {
+      e.preventDefault();
+      window.location.href = href;
+    }
+  }, false);
+}
+// Service Worker 注册（跨页面SW保持一致即可）
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('./service-worker.js', { scope: './' }).catch(function () {});
+  });
+}
+</script>
+</body>
+</html>

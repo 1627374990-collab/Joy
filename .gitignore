@@ -1,0 +1,84 @@
+# ===== OS / Editor / System =====
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.project
+.classpath
+*.iml
+.history/
+
+# ===== Node / NPM (if ever added) =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json.bak
+.pnpm-debug.log*
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+Pipfile.lock
+poetry.lock.bak
+.python-version
+
+# ===== Capacitor / Cordova / Mobile shells (if added later) =====
+.gradle/
+build/
+*.apk
+*.aab
+*.ipa
+*.xcuserstate
+ios/Pods/
+ios/DerivedData/
+ios/build/
+android/.gradle/
+android/build/
+android/app/build/
+
+# ===== Env / Secrets / Credentials =====
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+tokens.txt
+credentials.json
+*.mobileprovision
+
+# ===== Logs / Caches / Temp =====
+*.log
+*.tmp
+.cache/
+.tmp/
+.temp/
+coverage/
+.nyc_output/
+.parcel-cache/
+.next/
+.nuxt/
+
+# ===== Project-specific: local data dumps (never commit user records) =====
+*.sqlite
+*.db
+dumps/
+backups/
+export-output/
