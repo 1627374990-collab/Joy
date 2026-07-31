@@ -4,6 +4,7 @@
   margin: 0;
   padding: 0;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 html, body {
@@ -14,10 +15,21 @@ html, body {
   background: #f5f7fa;
   color: #333;
   overflow-x: hidden;
+  /* 全局滚动优化：消除 Safari 橡皮筋期间的掉帧；避免手势冲突吞掉页面纵向滚动 */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  /* iOS 13+：合成器层直接处理双指缩放/滚动，避免 300ms 点击判定阻塞主线程 */
+  touch-action: manipulation;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  padding-bottom: 24px;
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  /* 全局禁用不必要的合成层属性，避免子元素隐式创建 */
+  -webkit-font-smoothing: antialiased;
 }
 
 button {
@@ -132,11 +144,19 @@ input, textarea {
 /* ===== Table ===== */
 .table-wrapper {
   overflow-x: auto;
+  overflow-y: visible;
   margin: 10px 12px 0;
   background: #fff;
   border-radius: 12px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
   -webkit-overflow-scrolling: touch;
+  /* 移动端水平表格滚动：合成器接管，减少 layout/reflow 掉帧 */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  will-change: scroll-position;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
+  contain: layout paint;
 }
 
 .status-table {
@@ -145,6 +165,8 @@ input, textarea {
   border-spacing: 0;
   font-size: 13px;
   table-layout: fixed;
+  /* 固定表格 + contain：减少 Safari 布局阶段对未修改单元格的重算 */
+  contain: layout paint size;
 }
 
 .status-table thead {
@@ -152,6 +174,12 @@ input, textarea {
   top: 0;
   z-index: 5;
   background: #f8f9fa;
+  /* 固定表头：iOS Safari sticky + 合成层显式提升，避免滚动期间重绘导致丢帧 */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  will-change: transform;
 }
 
 .status-table th,
@@ -161,6 +189,8 @@ input, textarea {
   border-bottom: 1px solid #f0f0f0;
   white-space: nowrap;
   min-width: 50px;
+  /* 每个单元格避免被 sticky 重绘时反复重算 */
+  contain: layout paint;
 }
 
 .status-table th {
@@ -170,6 +200,8 @@ input, textarea {
   position: relative;
   padding-top: 10px;
   padding-bottom: 10px;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 .status-table th.sub-col {
@@ -208,6 +240,12 @@ input, textarea {
   text-align: left;
   padding-left: 12px;
   border-right: 2px solid #e0e0e0;
+  /* 左侧冻结列：iOS 合成层提升 + backface-visibility，避免横滚时重新栅格化 */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  will-change: transform;
 }
 
 .status-table tbody tr:nth-child(even) {
@@ -218,8 +256,17 @@ input, textarea {
   background: #fafbfc;
 }
 
-.status-table tbody tr:hover {
-  background: #e3f2fd;
+/* 移动端无 hover，避免合成器反复触发 hover 计算导致卡顿；仅电脑端保留 */
+@media (hover: hover) and (pointer: fine) {
+  .status-table tbody tr:hover {
+    background: #e3f2fd;
+  }
+}
+/* 触摸端：用更轻的点击态替代 hover（避免长按/双指手势时重绘背景） */
+@media (hover: none) and (pointer: coarse) {
+  .status-table tbody tr:active {
+    background: rgba(227, 242, 253, 0.6);
+  }
 }
 
 .status-table td.note-cell,
@@ -247,6 +294,12 @@ input, textarea {
   right: 0;
   background: inherit;
   z-index: 3;
+  /* 右侧冻结列：同样提升合成层，避免横滚时丢帧 */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  will-change: transform;
 }
 
 .del-hour-btn {
@@ -334,17 +387,31 @@ input, textarea {
 /* Current hour highlight */
 .status-table tr.current-hour td {
   background: #e3f2fd !important;
-  animation: pulse 2s ease-in-out infinite;
+}
+
+/* 当前行动画：
+ *  - 桌面端（有鼠标）保留 pulse（用 outline 替代 inset box-shadow，避免手机上每帧重新栅格化）
+ *  - 触屏手机端（iOS Safari）默认关掉动画，减少掉帧和电量消耗；用户要动画可开 reduced-motion 之外的默认
+ */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .status-table tr.current-hour td {
+    animation: pulse 2.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { outline: 1px solid rgba(25, 118, 210, 0.15); outline-offset: -1px; }
+    50%      { outline: 2px solid rgba(25, 118, 210, 0.50); outline-offset: -2px; }
+  }
+}
+@media (hover: none) and (pointer: coarse) {
+  .status-table tr.current-hour td {
+    /* 手机端仅用 1 条更粗的左边框做视觉提示（零动画、零重绘） */
+    border-left: 3px solid #1976d2;
+  }
 }
 
 .status-table tr.current-hour td.hour-cell {
   background: #e3f2fd !important;
   color: #0d47a1;
-}
-
-@keyframes pulse {
-  0%, 100% { box-shadow: inset 0 0 0 0 rgba(25, 118, 210, 0.2); }
-  50% { box-shadow: inset 0 0 0 2px rgba(25, 118, 210, 0.3); }
 }
 
 /* ===== Legend ===== */

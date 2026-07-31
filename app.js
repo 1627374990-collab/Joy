@@ -123,6 +123,31 @@
   }
 
   // ===== Storage =====
+  // scheduleIdle 兼容垫片：优先 requestIdleCallback（iOS 16+ 支持），其次 rAF + 延时
+  function _scheduleIdle(fn, timeoutMs) {
+    const maxWait = timeoutMs || 250;
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      try { return window.requestIdleCallback(fn, { timeout: maxWait }); } catch (e) {}
+    }
+    // 回退：在下一帧之后再执行，避免阻塞当前交互（移动端交互-渲染关键路径）
+    return setTimeout(() => {
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => { try { fn(); } catch (e) {} });
+      } else {
+        try { fn(); } catch (e) {}
+      }
+    }, 0);
+  }
+
+  // 通用的 debounce：用于 input / 保存 / 定时器 等高频触发场景
+  function _debounce(fn, waitMs) {
+    let t = null;
+    return function debounced(...args) {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => { t = null; fn.apply(this, args); }, waitMs);
+    };
+  }
+
   function loadSettings() {
     try {
       const s = localStorage.getItem(STORAGE_KEY_SETTINGS);
@@ -131,8 +156,20 @@
     return { ...DEFAULT_SETTINGS };
   }
 
+  // saveSettings 去抖 + 空闲时再序列化+写入，避免拖拽/打字时的主线程 IO 阻塞
+  let _saveSettingsPending = null;
+  function _flushSaveSettings() {
+    try { localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings)); } catch (e) {}
+    _saveSettingsPending = null;
+  }
   function saveSettings() {
-    localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+    if (_saveSettingsPending) return; // 已经有一次挂起就合并（避免堆积）
+    _saveSettingsPending = _scheduleIdle(_flushSaveSettings, 350);
+  }
+  // 保存 settings 的同步版本（用于离开页面/打印/导出这种必须立即写盘的场景）
+  function saveSettingsSync() {
+    if (_saveSettingsPending) { try { clearTimeout(_saveSettingsPending); } catch (e) {} _saveSettingsPending = null; }
+    try { localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings)); } catch (e) {}
   }
 
   function loadCategories() {
@@ -144,7 +181,10 @@
   }
 
   function saveCategories() {
-    localStorage.setItem(STORAGE_KEY_CATEGORIES, JSON.stringify(categories));
+    // categories 改动频率低，直接 idle 写
+    _scheduleIdle(() => {
+      try { localStorage.setItem(STORAGE_KEY_CATEGORIES, JSON.stringify(categories)); } catch (e) {}
+    }, 400);
   }
 
   function loadRecords() {
@@ -155,8 +195,26 @@
     return {};
   }
 
+  // saveRecords 走 debounce(150ms) + 空闲时写盘
+  // 150ms 对「连续打勾/打字」足够合并为一次写入，又不会让用户感知到"不保存"
+  const _debouncedFlushRecords = _debounce(() => {
+    _scheduleIdle(() => {
+      try { localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records)); } catch (e) {}
+    }, 250);
+  }, 150);
   function saveRecords() {
-    localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records));
+    _debouncedFlushRecords();
+  }
+  // 同步写盘（pageshow/pagehide/export/print 等关键时机调用）
+  function saveRecordsSync() {
+    try { localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records)); } catch (e) {}
+  }
+  // 离开页面前保证写盘一次（移动端切到后台/杀进程前 iOS Safari 可能不执行，但多一层保障）
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', () => { try { saveRecordsSync(); saveSettingsSync(); } catch (e) {} }, { passive: true });
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') { try { saveRecordsSync(); saveSettingsSync(); } catch (e) {} }
+    }, { passive: true });
   }
 
   function getDayRecords(dateStr) {
@@ -212,6 +270,10 @@
   }
 
   // ===== Make a header column resizable by drag =====
+  // 移动端性能优化：
+  //   1) 列宽写入 + querySelectorAll 循环都塞到下一帧 requestAnimationFrame 执行
+  //   2) 移动端 touchstart 不调用 preventDefault 防止触发 Safari 300ms 点击延迟合成器阻塞
+  //   3) touchmove 用被动监听无法 preventDefault，但拖拽手柄本身已加 touch-action:none，Safari 合成器不会吞事件
   function makeResizable(column, key) {
     column.style.position = 'relative';
     const resizer = document.createElement('div');
@@ -219,7 +281,63 @@
     resizer.title = '拖拽调整列宽';
     column.appendChild(resizer);
 
-    let startX, startWidth, isResizing = false;
+    let startX = 0, startWidth = 0, isResizing = false;
+    let rafPending = false, pendingWidth = 0;
+    const allTargets = () => Array.from(document.querySelectorAll(`[data-col-key="${CSS.escape(key)}"]`));
+
+    // 统一的「写入宽度到 DOM」函数（合并 rAF，避免 60Hz 内多次 layout）
+    function applyWidth(width) {
+      pendingWidth = width;
+      if (rafPending) return;
+      rafPending = true;
+      (window.requestAnimationFrame || ((cb) => setTimeout(cb, 16)))(() => {
+        rafPending = false;
+        const w = pendingWidth;
+        column.style.width = w + 'px';
+        column.style.minWidth = w + 'px';
+        column.style.maxWidth = w + 'px';
+        const nodes = allTargets();
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          if (n === column) continue;
+          n.style.width = w + 'px';
+          n.style.minWidth = w + 'px';
+          n.style.maxWidth = w + 'px';
+        }
+      });
+    }
+
+    function recalcTableWidth() {
+      const tbl = document.getElementById('status-table');
+      if (!tbl) return;
+      // 用 settings.columnWidths 直接求和（无需再遍历 DOM）
+      const custom = settings.columnWidths || {};
+      let total = 0;
+      const seen = new Set();
+      document.querySelectorAll('[data-col-key]').forEach((el) => {
+        const k = el.dataset.colKey;
+        if (seen.has(k)) return;
+        seen.add(k);
+        total += (typeof custom[k] === 'number' && custom[k] > 0) ? custom[k] : getColumnWidth(k);
+      });
+      tbl.style.width = total + 'px';
+      tbl.style.minWidth = total + 'px';
+    }
+
+    function commitWidthAndTeardown(keepCursor) {
+      if (!isResizing) return;
+      isResizing = false;
+      if (!keepCursor) {
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.body.style.touchAction = '';
+      }
+      const newWidth = column.offsetWidth;
+      if (!settings.columnWidths) settings.columnWidths = {};
+      settings.columnWidths[key] = newWidth;
+      saveSettings();
+      recalcTableWidth();
+    }
 
     resizer.addEventListener('mousedown', (e) => {
       isResizing = true;
@@ -227,7 +345,7 @@
       startWidth = column.offsetWidth;
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', resize);
+      document.addEventListener('mousemove', resize, { passive: true });
       document.addEventListener('mouseup', stopResize);
       e.preventDefault();
       e.stopPropagation();
@@ -239,81 +357,36 @@
       isResizing = true;
       startX = e.touches[0].pageX;
       startWidth = column.offsetWidth;
+      // 拖拽手柄的 CSS 已设置 touch-action: none，这里不调用 preventDefault 避免 300ms 点击延迟
+      document.body.style.touchAction = 'none';
       document.addEventListener('touchmove', touchResize, { passive: false });
-      document.addEventListener('touchend', touchStop);
-      e.preventDefault();
+      document.addEventListener('touchend', touchStop, { passive: true });
+      document.addEventListener('touchcancel', touchStop, { passive: true });
       e.stopPropagation();
     });
 
     function resize(e) {
       if (!isResizing) return;
-      const width = Math.max(40, startWidth + (e.pageX - startX));
-      column.style.width = `${width}px`;
-      column.style.minWidth = `${width}px`;
-      column.style.maxWidth = `${width}px`;
-      document.querySelectorAll(`[data-col-key="${key}"]`).forEach(td => {
-        if (td !== column) {
-          td.style.width = `${width}px`;
-          td.style.minWidth = `${width}px`;
-          td.style.maxWidth = `${width}px`;
-        }
-      });
+      applyWidth(Math.max(40, startWidth + (e.pageX - startX)));
     }
 
     function touchResize(e) {
       if (!isResizing || e.touches.length !== 1) return;
-      const width = Math.max(40, startWidth + (e.touches[0].pageX - startX));
-      column.style.width = `${width}px`;
-      column.style.minWidth = `${width}px`;
-      column.style.maxWidth = `${width}px`;
-      document.querySelectorAll(`[data-col-key="${key}"]`).forEach(td => {
-        if (td !== column) {
-          td.style.width = `${width}px`;
-          td.style.minWidth = `${width}px`;
-          td.style.maxWidth = `${width}px`;
-        }
-      });
-      e.preventDefault();
-    }
-
-    function recalcTableWidth() {
-      const tbl = document.getElementById('status-table');
-      if (tbl) {
-        const seen = new Set();
-        let total = 0;
-        document.querySelectorAll('[data-col-key]').forEach(el => {
-          const k = el.dataset.colKey;
-          if (!seen.has(k)) { seen.add(k); total += getColumnWidth(k); }
-        });
-        tbl.style.width = total + 'px';
-        tbl.style.minWidth = total + 'px';
-      }
+      applyWidth(Math.max(40, startWidth + (e.touches[0].pageX - startX)));
+      // 被动监听不能 preventDefault，但 resizer 本身 touch-action:none，Safari 已不会滚动
     }
 
     function stopResize() {
-      if (!isResizing) return;
-      isResizing = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      const newWidth = column.offsetWidth;
-      if (!settings.columnWidths) settings.columnWidths = {};
-      settings.columnWidths[key] = newWidth;
-      saveSettings();
-      recalcTableWidth();
       document.removeEventListener('mousemove', resize);
       document.removeEventListener('mouseup', stopResize);
+      commitWidthAndTeardown(false);
     }
 
     function touchStop() {
-      if (!isResizing) return;
-      isResizing = false;
-      const newWidth = column.offsetWidth;
-      if (!settings.columnWidths) settings.columnWidths = {};
-      settings.columnWidths[key] = newWidth;
-      saveSettings();
-      recalcTableWidth();
       document.removeEventListener('touchmove', touchResize);
       document.removeEventListener('touchend', touchStop);
+      document.removeEventListener('touchcancel', touchStop);
+      commitWidthAndTeardown(true);
     }
   }
 
@@ -753,11 +826,25 @@
     textarea.placeholder = 'Note...';
     textarea.value = meta.note || '';
     textarea.dataset.hour = hour;
-    textarea.addEventListener('input', (e) => {
+    // note 文本输入：去抖 180ms 再写盘（中文输入法联想/拼音连续击键都合并为一次写入）
+    textarea.addEventListener('input', _debounce((e) => {
       const h = e.target.dataset.hour;
       saveNote(date, h, e.target.value);
       updateNoteHighlight(tdNote, date, h);
-    });
+    }, 180));
+    // blur 时立即写盘一次（去抖挂起的内容 + 用户要点别的地方离开输入框）
+    textarea.addEventListener('blur', (e) => {
+      const h = e.target.dataset.hour;
+      if (!h) return;
+      // 先直接写入内存，避免去抖超时期间关闭页面导致丢字
+      const m = getHourMeta(date, h);
+      if (m.note !== e.target.value) {
+        m.note = e.target.value;
+        m.noteTimestamp = Date.now ? Date.now() : getNow().getTime();
+      }
+      saveRecordsSync();
+      updateNoteHighlight(tdNote, date, h);
+    }, { passive: true });
     tdNote.appendChild(textarea);
 
     updateNoteHighlight(tdNote, date, hour);
@@ -769,11 +856,8 @@
     if (!ta) return;
     if (settings.outOfRangeHighlight && meta.noteTimestamp) {
       const isOOR = isOutOfRange(date, hour, meta.noteTimestamp);
-      if (isOOR) {
-        ta.classList.add('out-of-range');
-      } else {
-        ta.classList.remove('out-of-range');
-      }
+      if (isOOR) ta.classList.add('out-of-range');
+      else ta.classList.remove('out-of-range');
     } else {
       ta.classList.remove('out-of-range');
     }
@@ -1096,12 +1180,33 @@
   }
 
   // ===== Render All =====
-  function renderAll() {
+  // 渲染：full=true 用于 初始化/pageshow/从设置返回/批量修改后 这种"必须重建DOM"的场景
+  //       full=false（默认）只刷新轻量 UI（时钟/banner/待填/表头高亮），不重建表格，避免手机端反复 layout 卡顿
+  let _lastHourHighlightDate = null;
+  let _lastHourHighlightHour = -1;
+  function renderAll(full) {
     applyHighlightColor();
     renderHeader();
-    renderTable();
+    if (full === true) renderTable();
     renderPendingCount();
     renderReminderBanner();
+    // 即使不是 full，跨整点也要立即重建一次（新进入当前小时需要高亮 tr.current-hour）
+    const now = getNow();
+    const today = getGMTDateString(now);
+    const hr = parseInt(getGMTHourString(now), 10);
+    if ((_lastHourHighlightDate !== today || _lastHourHighlightHour !== hr) && full !== true) {
+      // 只更新 tr.current-hour 的高亮：先移除旧，再加新，避免整表重绘
+      const oldCurr = document.querySelector('#status-table tr.current-hour, table.status-table tr.current-hour');
+      if (oldCurr) oldCurr.classList.remove('current-hour');
+      const allRows = document.querySelectorAll('#status-table tbody tr, table.status-table tbody tr');
+      if (allRows && allRows[hr]) allRows[hr].classList.add('current-hour');
+      _lastHourHighlightDate = today;
+      _lastHourHighlightHour = hr;
+    }
+    if (full === true) {
+      _lastHourHighlightDate = today;
+      _lastHourHighlightHour = hr;
+    }
   }
 
   // ===== GMT Clock =====
@@ -1115,15 +1220,16 @@
   function setupReminderSystem() {
     // Request notification permission
     if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {});
+      // 延迟请求权限，避免首屏启动期打断关键渲染
+      setTimeout(() => Notification.requestPermission().catch(() => {}), 4000);
     }
 
+    // 时钟/banner 走 5 秒（UI 层面），但不再触发 renderTable
     setInterval(() => {
       updateClock();
       renderReminderBanner();
       renderPendingCount();
 
-      // Check if we should show browser notification
       const now = getNow();
       const today = getGMTDateString(now);
       const currentHour = parseInt(getGMTHourString(now));
@@ -1146,9 +1252,9 @@
         }
       }
 
-      // Auto refresh the current hour highlight every minute
-      if (now.getUTCSeconds() < 2) {
-        renderTable();
+      // 整点时刻（仅一次，UTC 秒 0 ~ 8 窗口）跨到新小时时，执行 1 次 full 渲染重建表格
+      if (now.getUTCSeconds() <= 8) {
+        renderAll(true);
       }
     }, 5000);
   }
@@ -1170,16 +1276,18 @@
     // Date is always today in GMT mode
     document.getElementById('current-date').addEventListener('click', () => {
       currentDate = getTodayDate();
-      renderAll();
+      renderAll(true);
     });
 
     // Buttons
     document.getElementById('btn-one-click').addEventListener('click', oneClickCurrentHour);
     document.getElementById('btn-export-pdf').addEventListener('click', exportPDF);
     document.getElementById('btn-settings').addEventListener('click', () => {
+      try { saveRecordsSync(); saveSettingsSync(); } catch (e) {}
       window.location.href = 'settings.html';
     });
     document.getElementById('btn-history').addEventListener('click', () => {
+      try { saveRecordsSync(); saveSettingsSync(); } catch (e) {}
       window.location.href = 'history.html';
     });
 
@@ -1188,17 +1296,16 @@
       document.getElementById('reminder-banner').classList.add('hidden');
     });
 
-    // Render
-    renderAll();
+    // Render（首次加载必须 full 重建表格 DOM）
+    renderAll(true);
 
     // Start clock
     updateClock();
 
-    // Setup reminder system (auto-refreshes every 5s)
+    // Setup reminder system (auto-refreshes every 5s, 不再 30s 无意义全表重绘)
     setupReminderSystem();
 
-    // Refresh every 30s
-    setInterval(() => { renderAll(); }, 30000);
+    // 移除了原 setInterval(()=>{ renderAll() }, 30000) 的无意义全表重绘（避免手机端每 30 秒重建 ~1200+ 单元格导致明显卡顿/掉帧/发热）
 
     // Auto-refresh when returning from settings/history (page shown again)
     window.addEventListener('pageshow', () => {
@@ -1206,7 +1313,7 @@
       categories = loadCategories();
       records = loadRecords();
       currentDate = getGMTDateString(getNow());
-      renderAll();
+      renderAll(true); // 从设置返回：类/顺序/颜色 都可能变，必须 full 重绘
     });
   }
 
