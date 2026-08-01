@@ -31,6 +31,8 @@
     },
     columnWidths: {},
     defaultColWidth: 80,
+    pdfExportDays: 7,
+    fontSize: 'medium',
   };
 
   const STATUS_EMPTY = '';
@@ -387,6 +389,46 @@
       document.removeEventListener('touchend', touchStop);
       document.removeEventListener('touchcancel', touchStop);
       commitWidthAndTeardown(true);
+    }
+
+    // Double-click to auto-fit column width (Excel-like behavior)
+    resizer.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      autoFitColumn(column, key);
+    });
+    column.addEventListener('dblclick', (e) => {
+      // Only auto-fit if double-clicked on the column header text area (not on buttons)
+      if (e.target === column || e.target.tagName === 'TH') {
+        autoFitColumn(column, key);
+      }
+    });
+
+    function autoFitColumn(col, colKey) {
+      // Find all cells in this column and compute max content width
+      const cells = document.querySelectorAll(`[data-col-key="${CSS.escape(colKey)}"]`);
+      let maxW = 40;
+      const originalW = col.style.width;
+      // Temporarily set to auto to measure content
+      cells.forEach(c => {
+        c.style.width = 'auto';
+        c.style.minWidth = '0';
+        c.style.maxWidth = 'none';
+      });
+      // Measure
+      cells.forEach(c => {
+        const w = c.scrollWidth;
+        if (w > maxW) maxW = w;
+      });
+      // Add padding
+      maxW = Math.min(maxW + 16, 300);
+      // Apply
+      applyWidth(maxW);
+      if (!settings.columnWidths) settings.columnWidths = {};
+      settings.columnWidths[colKey] = maxW;
+      saveSettings();
+      recalcTableWidth();
+      showSnackbar(`列宽已自适应: ${maxW}px`);
     }
   }
 
@@ -1263,6 +1305,13 @@
   function init() {
     // Always use today's date
     currentDate = getTodayDate();
+
+    // Apply font size from settings
+    (function applyFontSize() {
+      const map = { 'small': '13px', 'medium': '15px', 'large': '17px', 'xlarge': '19px' };
+      const s = settings.fontSize || 'medium';
+      document.documentElement.style.fontSize = map[s] || map['medium'];
+    })();
 
     applyHighlightColor();
     document.getElementById('legend-dot').style.background = settings.highlightColor;

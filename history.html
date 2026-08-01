@@ -67,7 +67,7 @@
   }
   .back-btn:active { background: #e3f2fd; transform: scale(0.97); }
 </style>
-<link rel="stylesheet" href="styles.css?v=120">
+<link rel="stylesheet" href="styles.css?v=130">
 </head>
 <body>
 <header class="app-header">
@@ -95,6 +95,8 @@
     <div class="control-actions">
       <button id="btn-search" class="btn btn-primary">🔍 查询</button>
       <button id="btn-export-range" class="btn btn-outline">📄 导出PDF</button>
+      <button id="btn-quick-export" class="btn btn-outline">⚡ 一键导出</button>
+      <button id="btn-clear-history" class="btn btn-sm btn-danger">🗑 清除全部历史</button>
     </div>
   </section>
 
@@ -133,7 +135,7 @@
   </div>
 </div>
 
-<script src="history.js?v=120"></script>
+<script src="history.js?v=130"></script>
 
 <!-- iOS PWA standalone 模式下保持站内跳转不跳出到 Safari + SW 注册 -->
 <script>

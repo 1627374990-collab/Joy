@@ -1442,11 +1442,11 @@ input, textarea {
   align-items: center;
 }
 
-/* Column Resizer (drag handle) */
+/* Column Resizer (drag handle) - Excel-style */
 .column-resizer {
   position: absolute;
   top: 0;
-  right: -3px;
+  right: -4px;
   width: 8px;
   height: 100%;
   background: transparent;
@@ -1454,11 +1454,18 @@ input, textarea {
   z-index: 20;
   user-select: none;
   touch-action: none;
+  transition: background 0.15s;
 }
 
 .column-resizer:hover,
 .column-resizer:active {
-  background: rgba(25, 118, 210, 0.5);
+  background: rgba(25, 118, 210, 0.4);
+  width: 8px;
+}
+
+/* Show a visual indicator on the right edge of resizable columns */
+.status-table th {
+  position: relative;
 }
 
 /* Show a visual indicator on the right edge of resizable columns */

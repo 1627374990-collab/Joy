@@ -26,6 +26,8 @@
     },
     columnWidths: {}, // key: 'catId_subId' or 'hour'/'note'/'time'/'del', value: px number
     defaultColWidth: 80,
+    pdfExportDays: 7,      // 一键导出天数（1-30）
+    fontSize: 'medium',    // 'small' | 'medium' | 'large' | 'xlarge'
   };
 
   let settings = loadSettings();
@@ -640,6 +642,39 @@
       persistHighlightSettings();
     });
 
+    // ===== PDF Export Habit =====
+    const pdfDaysInput = document.getElementById('pdf-export-days');
+    if (pdfDaysInput) {
+      pdfDaysInput.value = settings.pdfExportDays || 7;
+      pdfDaysInput.addEventListener('input', (e) => {
+        let v = parseInt(e.target.value, 10) || 7;
+        if (v < 1) v = 1;
+        if (v > 30) v = 30;
+        settings.pdfExportDays = v;
+        persistHighlightSettings();
+      });
+      pdfDaysInput.addEventListener('blur', (e) => {
+        let v = parseInt(e.target.value, 10) || 7;
+        if (v < 1) v = 1;
+        if (v > 30) v = 30;
+        e.target.value = v;
+      });
+    }
+
+    // ===== Font Size =====
+    const fontSizeBtns = document.querySelectorAll('.font-size-btn');
+    fontSizeBtns.forEach(btn => {
+      btn.classList.toggle('selected', btn.dataset.size === (settings.fontSize || 'medium'));
+      btn.addEventListener('click', () => {
+        fontSizeBtns.forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        settings.fontSize = btn.dataset.size;
+        persistHighlightSettings();
+        applyFontSize(settings.fontSize);
+        showSnackbar('字体大小已切换为' + btn.textContent.trim());
+      });
+    });
+
     // ===== Clock (live time + manual edit) =====
     initClock();
 
@@ -734,6 +769,9 @@
       });
     });
 
+    // Apply font size on load
+    applyFontSize(settings.fontSize || 'medium');
+
     // Render
     renderCategories();
     renderParents();
@@ -741,6 +779,11 @@
 
   function persistHighlightSettings() {
     saveSettings();
+  }
+
+  function applyFontSize(size) {
+    const map = { 'small': '13px', 'medium': '15px', 'large': '17px', 'xlarge': '19px' };
+    document.documentElement.style.fontSize = map[size] || map['medium'];
   }
 
   function loadRecords() {

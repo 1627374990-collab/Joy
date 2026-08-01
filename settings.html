@@ -40,8 +40,29 @@
     min-height: 40px;
     padding: 8px 10px;
   }
+  .font-size-opts {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .font-size-btn {
+    flex: 1;
+    min-height: 44px;
+    border: 2px solid #e0e0e0;
+    border-radius: 10px;
+    background: #fff;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .font-size-btn.selected {
+    border-color: #1976d2;
+    background: #e3f2fd;
+    color: #1976d2;
+    font-weight: 700;
+  }
+  .font-size-btn:active { transform: scale(0.97); }
 </style>
-<link rel="stylesheet" href="styles.css?v=120">
+<link rel="stylesheet" href="styles.css?v=130">
 <style>
   .settings-header {
     display: flex;
@@ -218,6 +239,28 @@
     </div>
   </section>
 
+  <!-- PDF Export Habit -->
+  <section class="settings-section">
+    <h2>📄 一键导出PDF习惯</h2>
+    <div class="settings-row">
+      <label for="pdf-export-days">一键导出天数</label>
+      <input type="number" id="pdf-export-days" min="1" max="30" value="7" style="max-width:80px;">
+    </div>
+    <div class="range-display">设置后，历史查询页的「⚡ 一键导出」按钮将以昨天为起点，导出此前指定天数的记录。上限30天。</div>
+  </section>
+
+  <!-- Font Size -->
+  <section class="settings-section">
+    <h2>🔤 字体大小</h2>
+    <div class="font-size-opts">
+      <button type="button" class="font-size-btn" data-size="small" style="font-size:13px;">小</button>
+      <button type="button" class="font-size-btn" data-size="medium" style="font-size:15px;">中</button>
+      <button type="button" class="font-size-btn" data-size="large" style="font-size:17px;">大</button>
+      <button type="button" class="font-size-btn" data-size="xlarge" style="font-size:19px;">特大</button>
+    </div>
+    <div class="range-display">调整应用全局字体大小，影响主页表格、设置页和历史页。</div>
+  </section>
+
   <!-- One-Click Preset -->
   <section class="settings-section">
     <h2>⚡ 一键打卡预设</h2>
@@ -291,7 +334,7 @@
   </div>
 </div>
 
-<script src="settings.js?v=120"></script>
+<script src="settings.js?v=130"></script>
 
 <!-- iOS PWA standalone 模式下保持站内跳转不跳出到 Safari -->
 <script>

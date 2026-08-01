@@ -21,13 +21,20 @@
   let categories = loadCategories();
   let records = loadRecords();
 
+  // Apply font size from settings
+  (function applyFontSize() {
+    const map = { 'small': '13px', 'medium': '15px', 'large': '17px', 'xlarge': '19px' };
+    const s = settings.fontSize || 'medium';
+    document.documentElement.style.fontSize = map[s] || map['medium'];
+  })();
+
   // ===== Storage =====
   function loadSettings() {
     try {
       const s = localStorage.getItem(STORAGE_KEY_SETTINGS);
       if (s) return JSON.parse(s);
     } catch (e) { /* ignore */ }
-    return { highlightColor: '#ffeb3b', timeRangeMinutes: 30, outOfRangeHighlight: true, reminderEnabled: true, pdfTitle: '状态巡检记录' };
+    return { highlightColor: '#ffeb3b', timeRangeMinutes: 30, outOfRangeHighlight: true, reminderEnabled: true, pdfTitle: '状态巡检记录', pdfExportDays: 7, fontSize: 'medium' };
   }
 
   function loadCategories() {
@@ -493,14 +500,34 @@
 
   function exportRange(startStr, endStr) {
     const dates = getDateRange(startStr, endStr);
-    let allRowsHTML = '';
+    const title = settings.pdfTitle || '状态巡检记录';
+
+    // 每天单独一个表格块，打印时每块占一页
+    let dayBlocks = '';
     let totalStatuses = 0;
     let filledStatuses = 0;
 
-    dates.forEach(date => {
+    dates.forEach((date, dayIdx) => {
       const data = collectDateData(date);
-      allRowsHTML += `<tr><td colspan="100%" style="background:#e3f2fd;font-weight:bold;padding:6px;font-size:13px;">📅 ${getFullDateLabel(date)} (GMT)</td></tr>`;
+      const dateObj = new Date(date + 'T00:00:00Z');
+      const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
 
+      // Build headers for this day
+      let catHeaders = '';
+      categories.forEach(cat => {
+        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
+        catHeaders += `<th colspan="${subs.length}" style="border:1px solid #333;padding:4px;background:#e8f0fe;font-weight:bold;font-size:10px;">${cat.name}</th>`;
+      });
+      let subHeaders = '';
+      categories.forEach(cat => {
+        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: '' }];
+        subs.forEach(sub => {
+          subHeaders += `<th style="border:1px solid #333;padding:3px;font-size:9px;background:#f5f5f5;">${sub.name || '●'}</th>`;
+        });
+      });
+
+      let rowsHTML = '';
       data.forEach(row => {
         let statusCells = '';
         categories.forEach(cat => {
@@ -514,7 +541,6 @@
             statusCells += `<td style="border:1px solid #333;padding:3px 2px;text-align:center;font-size:11px;color:${status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc'};">${status || ''}</td>`;
           });
         });
-
         let latest = null;
         categories.forEach(cat => {
           const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
@@ -525,48 +551,63 @@
         });
         if (row.noteTimestamp && (!latest || row.noteTimestamp > latest)) latest = row.noteTimestamp;
         const timeStr = latest ? getTimestampString(latest) : '';
-
-        allRowsHTML += `<tr>
-          <td style="border:1px solid #333;padding:3px 5px;font-size:11px;">${row.hour}:00</td>
+        const note = row.note || '';
+        const rowBg = parseInt(row.hour) % 2 === 0 ? 'background:#fafafa;' : '';
+        rowsHTML += `<tr style="${rowBg}">
+          <td style="border:1px solid #333;padding:3px 5px;font-size:11px;font-weight:bold;">${row.hour}:00</td>
           ${statusCells}
-          <td style="border:1px solid #333;padding:3px;font-size:10px;max-width:100px;">${row.note || ''}</td>
-          <td style="border:1px solid #333;padding:3px;font-size:10px;color:#666;">${timeStr}</td>
+          <td style="border:1px solid #333;padding:3px;font-size:10px;max-width:100px;word-break:break-word;">${note}</td>
+          <td style="border:1px solid #333;padding:3px;font-size:10px;color:#666;text-align:right;">${timeStr}</td>
         </tr>`;
       });
-    });
 
-    const title = settings.pdfTitle || '状态巡检记录';
-    const catHeaders = buildCatHeaders();
-    const subHeaders = buildSubHeaders();
+      const pageBreak = dayIdx < dates.length - 1 ? 'page-break-after: always;' : '';
+      dayBlocks += `
+      <div class="day-page" style="${pageBreak}">
+        <div class="day-page-header">
+          <span class="day-page-date">📅 ${dateLabel} (GMT)</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">时间</th>
+              ${catHeaders}
+              <th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">Note</th>
+              <th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">填入</th>
+            </tr>
+            <tr>${subHeaders}</tr>
+          </thead>
+          <tbody>${rowsHTML}</tbody>
+        </table>
+      </div>`;
+    });
 
     const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>${title} - ${startStr} 至 ${endStr}</title>
 <style>
-  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; padding: 20px; color: #333; }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  .subtitle { color: #666; font-size: 13px; margin-bottom: 16px; }
-  table { border-collapse: collapse; width: 100%; font-size: 10px; }
-  th, td { border: 1px solid #333; }
-  .footer { margin-top: 20px; font-size: 11px; color: #888; text-align: right; }
-  @media print { body { padding: 10mm; } }
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; padding: 10mm; color: #333; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .subtitle { color: #666; font-size: 12px; margin-bottom: 12px; }
+  .day-page { margin-bottom: 0; }
+  .day-page + .day-page { margin-top: 0; }
+  .day-page-header { font-size: 14px; font-weight: bold; margin-bottom: 6px; padding: 4px 8px; background: #e3f2fd; border-radius: 4px; }
+  .day-page-date { color: #1565c0; }
+  table { border-collapse: collapse; width: 100%; font-size: 10px; table-layout: fixed; }
+  th, td { border: 1px solid #333; word-wrap: break-word; overflow: hidden; }
+  .footer { margin-top: 12px; font-size: 10px; color: #888; text-align: right; }
+  @media print {
+    body { padding: 8mm; }
+    .day-page { page-break-after: always; }
+    .day-page:last-child { page-break-after: auto; }
+    @page { size: A4 portrait; margin: 8mm; }
+  }
 </style></head>
 <body>
   <h1>${title} · 历史汇总</h1>
   <div class="subtitle">日期范围: ${startStr} 至 ${endStr} (GMT) · 共 ${dates.length} 天 · 填写率 ${totalStatuses > 0 ? Math.round((filledStatuses/totalStatuses)*100) : 0}%</div>
-  <table>
-    <thead>
-      <tr>
-        <th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">时间</th>
-        ${catHeaders}
-        <th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">备注</th>
-        <th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">填入</th>
-      </tr>
-      <tr>${subHeaders}</tr>
-    </thead>
-    <tbody>${allRowsHTML}</tbody>
-  </table>
-  <div class="footer">状态记录系统</div>
-  <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 300); }<\/script>
+  ${dayBlocks}
+  <div class="footer">状态记录系统 · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div>
+  <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); }<\/script>
 </body></html>`;
 
     const win = window.open('', '_blank');
@@ -664,6 +705,27 @@
       if (start > end) { showSnackbar('起始日期不能晚于结束日期'); return; }
       showDialog('导出PDF', `确定要导出 ${start} 至 ${end} 的记录为 PDF？`, () => {
         exportRange(start, end);
+      });
+    });
+
+    // Quick Export (uses preset from settings)
+    document.getElementById('btn-quick-export').addEventListener('click', () => {
+      const days = settings.pdfExportDays || 7;
+      const end = shiftDate(getTodayDate(), -1); // 昨天为起点结束
+      const start = shiftDate(end, -(days - 1));
+      showSnackbar(`正在导出: ${start} 至 ${end}（共${days}天）`);
+      setTimeout(() => exportRange(start, end), 500);
+    });
+
+    // Clear All History
+    document.getElementById('btn-clear-history').addEventListener('click', () => {
+      showDialog('清除全部历史', '确定要清除所有日期的状态记录吗？此操作不可恢复！类别设置将保留。', () => {
+        showDialog('再次确认', '⚠️ 最后确认：将永久删除所有历史记录数据，确定继续？', () => {
+          records = {};
+          saveRecords();
+          showSnackbar('✅ 所有历史记录已清除');
+          setTimeout(() => window.location.reload(), 800);
+        });
       });
     });
 
