@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.6.0-rename-sync';
+  const VERSION = 'v1.7.0-refresh-fix';
   const CACHE_PREFIX = 'status-recorder-';
   const STATIC_CACHE = CACHE_PREFIX + 'static-' + VERSION;
   const RUNTIME_CACHE = CACHE_PREFIX + 'runtime-' + VERSION;

@@ -1024,7 +1024,7 @@
 
   // ===== One-Click Record =====
   function oneClickCurrentHour() {
-    const now = new Date();
+    const now = getNow();
     const hourStr = getGMTHourString(now);
     const date = getTodayDate();
     const preset = getPresetTargets();
@@ -1037,7 +1037,7 @@
     } else {
       showSnackbar('未填入任何项，请在设置中勾选填入对象');
     }
-    renderAll();
+    renderAll(true);
   }
 
   function getPresetTargets() {
@@ -1340,7 +1340,7 @@
         delete day[hour];
         saveRecords();
       }
-      renderAll();
+      renderAll(true);
       showSnackbar(`${hour}:00 记录已删除`);
     });
   }
