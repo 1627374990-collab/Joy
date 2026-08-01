@@ -642,25 +642,6 @@
       persistHighlightSettings();
     });
 
-    // ===== PDF Export Habit =====
-    const pdfDaysInput = document.getElementById('pdf-export-days');
-    if (pdfDaysInput) {
-      pdfDaysInput.value = settings.pdfExportDays || 7;
-      pdfDaysInput.addEventListener('input', (e) => {
-        let v = parseInt(e.target.value, 10) || 7;
-        if (v < 1) v = 1;
-        if (v > 30) v = 30;
-        settings.pdfExportDays = v;
-        persistHighlightSettings();
-      });
-      pdfDaysInput.addEventListener('blur', (e) => {
-        let v = parseInt(e.target.value, 10) || 7;
-        if (v < 1) v = 1;
-        if (v > 30) v = 30;
-        e.target.value = v;
-      });
-    }
-
     // ===== Font Size =====
     const fontSizeBtns = document.querySelectorAll('.font-size-btn');
     fontSizeBtns.forEach(btn => {
@@ -782,8 +763,8 @@
   }
 
   function applyFontSize(size) {
-    const map = { 'small': '13px', 'medium': '15px', 'large': '17px', 'xlarge': '19px' };
-    document.documentElement.style.fontSize = map[size] || map['medium'];
+    const map = { 'small': 0.8, 'medium': 1.0, 'large': 1.3, 'xlarge': 1.6 };
+    document.documentElement.style.setProperty('--fs', String(map[size] || 1.0));
   }
 
   function loadRecords() {

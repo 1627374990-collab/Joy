@@ -23,9 +23,9 @@
 
   // Apply font size from settings
   (function applyFontSize() {
-    const map = { 'small': '13px', 'medium': '15px', 'large': '17px', 'xlarge': '19px' };
+    const map = { 'small': 0.8, 'medium': 1.0, 'large': 1.3, 'xlarge': 1.6 };
     const s = settings.fontSize || 'medium';
-    document.documentElement.style.fontSize = map[s] || map['medium'];
+    document.documentElement.style.setProperty('--fs', String(map[s] || 1.0));
   })();
 
   // ===== Storage =====
@@ -669,6 +669,122 @@
     setTimeout(() => sb.remove(), 2800);
   }
 
+  // ===== 一键导出习惯：相对日期选择 =====
+  function buildRelativeDateOptions() {
+    const now = getNow();
+    // 本周一 (GMT)
+    const dayOfWeek = now.getUTCDay(); // 0=Sun, 1=Mon, ...
+    const mondayThisWeek = new Date(now);
+    mondayThisWeek.setUTCDate(now.getUTCDate() - ((dayOfWeek + 6) % 7));
+    mondayThisWeek.setUTCHours(0, 0, 0, 0);
+
+    // 上上周一 = 本周一 - 14天
+    const earliest = new Date(mondayThisWeek);
+    earliest.setUTCDate(mondayThisWeek.getUTCDate() - 14);
+
+    const weekdayNames = ['一', '二', '三', '四', '五', '六', '日'];
+    const options = [];
+    const todayStr = getGMTDateString(now);
+
+    let d = new Date(earliest);
+    while (d <= now) {
+      const dateStr = getGMTDateString(d);
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const dow = d.getUTCDay(); // 0=Sun
+      const dayName = weekdayNames[(dow + 6) % 7]; // 0=Mon
+
+      // 计算是第几周
+      const diffDays = Math.round((d - mondayThisWeek) / (24 * 60 * 60 * 1000));
+      let prefix;
+      if (dateStr === todayStr) {
+        prefix = '今天';
+      } else if (diffDays >= 0) {
+        prefix = '本周';
+      } else if (diffDays >= -7) {
+        prefix = '上周';
+      } else {
+        prefix = '上上周';
+      }
+
+      const label = `${prefix}${dayName} (${mm}-${dd})`;
+      options.push({ value: dateStr, label });
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return options;
+  }
+
+  function initQuickExportHabit() {
+    const startSel = document.getElementById('quick-export-start');
+    const endSel = document.getElementById('quick-export-end');
+    const btn = document.getElementById('btn-quick-export');
+    if (!startSel || !endSel || !btn) return;
+
+    const options = buildRelativeDateOptions();
+
+    // 填充选项
+    startSel.innerHTML = '';
+    endSel.innerHTML = '';
+    options.forEach(opt => {
+      startSel.innerHTML += `<option value="${opt.value}">${opt.label}</option>`;
+      endSel.innerHTML += `<option value="${opt.value}">${opt.label}</option>`;
+    });
+
+    // 从 settings 恢复上次选择（习惯）
+    const savedStart = settings.quickExportStart;
+    const savedEnd = settings.quickExportEnd;
+    // 默认：上周二 ~ 本周三（或今天，如果本周三还未到）
+    const now = getNow();
+    const dayOfWeek = now.getUTCDay();
+    const mondayThisWeek = new Date(now);
+    mondayThisWeek.setUTCDate(now.getUTCDate() - ((dayOfWeek + 6) % 7));
+    const lastTue = new Date(mondayThisWeek);
+    lastTue.setUTCDate(mondayThisWeek.getUTCDate() - 6); // 上周二
+    const thisWed = new Date(mondayThisWeek);
+    thisWed.setUTCDate(mondayThisWeek.getUTCDate() + 2); // 本周三
+    const todayDate = new Date(now);
+    todayDate.setUTCHours(0, 0, 0, 0);
+
+    const defaultStart = getGMTDateString(lastTue);
+    const defaultEnd = thisWed <= todayDate ? getGMTDateString(thisWed) : getGMTDateString(now);
+
+    const startVal = (savedStart && options.some(o => o.value === savedStart)) ? savedStart : defaultStart;
+    const endVal = (savedEnd && options.some(o => o.value === savedEnd)) ? savedEnd : defaultEnd;
+
+    startSel.value = startVal;
+    endSel.value = endVal;
+
+    // 确保 start <= end
+    function validateRange() {
+      if (startSel.value > endSel.value) {
+        showSnackbar('起始日不能晚于结束日，已自动调整');
+        startSel.value = endSel.value;
+      }
+    }
+    startSel.addEventListener('change', validateRange);
+    endSel.addEventListener('change', validateRange);
+
+    // 导出按钮
+    btn.addEventListener('click', () => {
+      const start = startSel.value;
+      const end = endSel.value;
+      if (!start || !end) { showSnackbar('请选择日期范围'); return; }
+      if (start > end) { showSnackbar('起始日不能晚于结束日'); return; }
+
+      // 保存习惯到 settings
+      settings.quickExportStart = start;
+      settings.quickExportEnd = end;
+      try {
+        localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+      } catch (e) {}
+
+      const startLabel = startSel.options[startSel.selectedIndex].text;
+      const endLabel = endSel.options[endSel.selectedIndex].text;
+      showSnackbar(`正在导出: ${startLabel} 至 ${endLabel}`);
+      setTimeout(() => exportRange(start, end), 500);
+    });
+  }
+
   // ===== Init =====
   function init() {
     document.getElementById('btn-back').addEventListener('click', () => {
@@ -679,16 +795,6 @@
     const weekAgo = shiftDate(today, -6);
     document.getElementById('date-start').value = weekAgo;
     document.getElementById('date-end').value = today;
-
-    document.querySelectorAll('.preset-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const days = parseInt(btn.dataset.days);
-        const end = getTodayDate();
-        const start = shiftDate(end, -(days - 1));
-        document.getElementById('date-start').value = start;
-        document.getElementById('date-end').value = end;
-      });
-    });
 
     document.getElementById('btn-search').addEventListener('click', () => {
       const start = document.getElementById('date-start').value;
@@ -708,14 +814,8 @@
       });
     });
 
-    // Quick Export (uses preset from settings)
-    document.getElementById('btn-quick-export').addEventListener('click', () => {
-      const days = settings.pdfExportDays || 7;
-      const end = shiftDate(getTodayDate(), -1); // 昨天为起点结束
-      const start = shiftDate(end, -(days - 1));
-      showSnackbar(`正在导出: ${start} 至 ${end}（共${days}天）`);
-      setTimeout(() => exportRange(start, end), 500);
-    });
+    // ===== 一键导出习惯：相对日期选择（上上周一 ~ 今天）=====
+    initQuickExportHabit();
 
     // Clear All History
     document.getElementById('btn-clear-history').addEventListener('click', () => {

@@ -697,8 +697,12 @@
             resizerTargets.push({ th, key: colKey });
           });
         } else {
+          // 无子状态的类别：不能设 visibility:hidden，否则 resizer 无法接收事件
+          // 改为透明背景+空文本，但保持可交互
           const th = document.createElement('th');
-          th.style.visibility = 'hidden';
+          th.textContent = '';
+          th.style.color = 'transparent';
+          th.style.background = 'transparent';
           const colKey = getColumnKey('category', cat.id);
           applyColumnWidth(th, colKey);
           const prevCat = i > 0 ? orderedCats[i - 1] : null;
@@ -1308,9 +1312,9 @@
 
     // Apply font size from settings
     (function applyFontSize() {
-      const map = { 'small': '13px', 'medium': '15px', 'large': '17px', 'xlarge': '19px' };
+      const map = { 'small': 0.8, 'medium': 1.0, 'large': 1.3, 'xlarge': 1.6 };
       const s = settings.fontSize || 'medium';
-      document.documentElement.style.fontSize = map[s] || map['medium'];
+      document.documentElement.style.setProperty('--fs', String(map[s] || 1.0));
     })();
 
     applyHighlightColor();

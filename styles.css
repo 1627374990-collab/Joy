@@ -1480,6 +1480,117 @@ body.col-resize-cursor * {
   user-select: none !important;
 }
 
+/* ===== Font Size Scaling (CSS variable --fs) ===== */
+/* applyFontSize() sets --fs on :root; all text uses calc(px * var(--fs)) */
+:root { --fs: 1; }
+
+body { font-size: calc(14px * var(--fs)) !important; }
+.app-header h1 { font-size: calc(18px * var(--fs)) !important; }
+.today-mode .current-date { font-size: calc(16px * var(--fs)) !important; }
+.date-full { font-size: calc(12px * var(--fs)) !important; }
+
+/* Table */
+.status-table { font-size: calc(13px * var(--fs)) !important; }
+.status-table th { font-size: calc(12px * var(--fs)) !important; }
+.status-table td { font-size: calc(13px * var(--fs)) !important; }
+.status-cell { font-size: calc(14px * var(--fs)) !important; }
+.status-cell.status-checked,
+.status-cell.status-crossed { font-size: calc(17px * var(--fs)) !important; }
+.status-table td.note-cell,
+.status-table th.note-cell { font-size: calc(12px * var(--fs)) !important; }
+.status-table td.time-cell,
+.status-table th.time-cell { font-size: calc(11px * var(--fs)) !important; }
+.hour-cell { font-size: calc(13px * var(--fs)) !important; }
+
+/* Buttons */
+.btn { font-size: calc(14px * var(--fs)) !important; }
+.btn-sm { font-size: calc(12px * var(--fs)) !important; }
+.btn-block { font-size: calc(14px * var(--fs)) !important; }
+.btn-icon { font-size: calc(16px * var(--fs)) !important; }
+.quick-actions .btn { font-size: calc(14px * var(--fs)) !important; }
+.day-card-actions .btn { font-size: calc(12px * var(--fs)) !important; }
+
+/* Settings */
+.settings-section h2 { font-size: calc(18px * var(--fs)) !important; }
+.settings-row label { font-size: calc(14px * var(--fs)) !important; }
+.clock-display { font-size: calc(22px * var(--fs)) !important; }
+.range-display { font-size: calc(12px * var(--fs)) !important; }
+.parent-name-input { font-size: calc(14px * var(--fs)) !important; }
+.category-name-input { font-size: calc(14px * var(--fs)) !important; }
+.sub-status-item input { font-size: calc(13px * var(--fs)) !important; }
+.preset-status-btn { font-size: calc(14px * var(--fs)) !important; }
+.preset-target-name { font-size: calc(13px * var(--fs)) !important; }
+.preset-parent-name { font-size: calc(14px * var(--fs)) !important; }
+.count-badge { font-size: calc(12px * var(--fs)) !important; }
+
+/* History */
+.history-controls label { font-size: calc(13px * var(--fs)) !important; }
+.date-input { font-size: calc(14px * var(--fs)) !important; }
+.summary-label { font-size: calc(11px * var(--fs)) !important; }
+.summary-value { font-size: calc(15px * var(--fs)) !important; }
+.day-date { font-size: calc(14px * var(--fs)) !important; }
+.day-rate { font-size: calc(16px * var(--fs)) !important; }
+.day-card-stats { font-size: calc(12px * var(--fs)) !important; }
+.detail-table { font-size: calc(11px * var(--fs)) !important; }
+
+/* Snackbar & misc */
+.snackbar { font-size: calc(13px * var(--fs)) !important; }
+.reminder-banner span { font-size: calc(13px * var(--fs)) !important; }
+.toggle-icon { font-size: calc(11px * var(--fs)) !important; }
+.toggle-subs { font-size: calc(14px * var(--fs)) !important; }
+
+/* Inputs */
+input[type="text"], input[type="number"], input[type="date"], input[type="time"], textarea, select {
+  font-size: calc(14px * var(--fs)) !important;
+}
+.clock-edit-row input[type="date"],
+.clock-edit-row input[type="time"] { font-size: calc(14px * var(--fs)) !important; }
+.settings-range-row select { font-size: calc(13px * var(--fs)) !important; }
+
+/* Quick Export Section */
+.quick-export-section {
+  background: #fff;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #eee;
+}
+.quick-export-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.quick-export-label {
+  font-size: calc(14px * var(--fs));
+  font-weight: 600;
+  color: #333;
+}
+.quick-export-opts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.quick-export-select {
+  flex: 1;
+  min-width: 120px;
+  min-height: 44px;
+  padding: 8px 32px 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  font-size: calc(14px * var(--fs));
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='M5 8l5 5 5-5' stroke='%23475569' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px 12px;
+}
+.quick-export-opts .btn {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
 /* Responsive */
 @media (max-width: 480px) {
   .app-header h1 { font-size: 16px; }
