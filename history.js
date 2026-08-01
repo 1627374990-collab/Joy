@@ -725,34 +725,105 @@ ${headerHTML}
   }
 
   async function renderHTMLStringToCanvas(htmlStr) {
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.left = '-99999px';
-    iframe.style.top = '0';
-    iframe.style.width = '3200px';
-    iframe.style.height = '3200px';
-    iframe.style.border = '0';
-    iframe.style.opacity = '0';
-    iframe.style.pointerEvents = 'none';
-    document.body.appendChild(iframe);
+    const styleMatch = htmlStr.match(/<style>([\s\S]*?)<\/style>/i);
+    const innerHTMLMatch = htmlStr.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    const styleCSS = styleMatch ? styleMatch[1] : '';
+    const bodyHTML = innerHTMLMatch ? innerHTMLMatch[1] : htmlStr;
+
+    const wrap = document.createElement('div');
+    wrap.setAttribute('data-pdf-render', '1');
+    wrap.style.cssText = `
+position: fixed;
+left: -30000px;
+top: 0;
+z-index: -999999;
+visibility: visible;
+opacity: 1;
+pointer-events: none;
+width: 3600px;
+height: auto;
+background: #fff;
+padding: 0;
+margin: 0;
+overflow: visible;
+transform: none;
+zoom: 1;
+`;
+    const scopedStyle = document.createElement('style');
+    const scopedCSS = scopeCSSRules(styleCSS, '[data-pdf-render="1"]');
+    scopedStyle.appendChild(document.createTextNode(scopedCSS));
+    wrap.appendChild(scopedStyle);
+
+    const contentHost = document.createElement('div');
+    contentHost.style.cssText = 'display:block; width:auto; height:auto; position:static; background:#fff;';
+    contentHost.innerHTML = bodyHTML;
+    wrap.appendChild(contentHost);
+
+    document.body.appendChild(wrap);
     try {
-      const idoc = iframe.contentDocument;
-      idoc.open();
-      idoc.write(htmlStr);
-      idoc.close();
-      await new Promise(r => setTimeout(r, 350));
-      const target = idoc.body.querySelector('.day-root') || idoc.body;
+      // eslint-disable-next-line no-unused-expressions
+      wrap.getBoundingClientRect();
+      await new Promise(r => setTimeout(r, 450));
+      const target = wrap.querySelector('.day-root') || contentHost;
+      target.style.background = '#ffffff';
+      const tbl = target.querySelector('table.pdf-table');
+      if (tbl && tbl.style.width) {
+        const w = parseInt(tbl.style.width, 10);
+        if (!isNaN(w)) target.style.width = (w + 60) + 'px';
+      }
+      await new Promise(r => setTimeout(r, 80));
+
+      const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 1);
+      const safeScale = isTouch ? 1.5 : 2;
+
       const canvas = await html2canvas(target, {
         backgroundColor: '#ffffff',
-        scale: 2,
+        scale: safeScale,
         useCORS: true,
         logging: false,
+        allowTaint: true,
         ignoreElements: el => false,
+        onclone: (clonedDoc) => {
+          const cl = clonedDoc.querySelector('.day-root') || clonedDoc.body;
+          if (cl) {
+            cl.style.background = '#ffffff';
+            cl.style.display = 'block';
+            cl.style.visibility = 'visible';
+            cl.style.position = 'static';
+          }
+        },
       });
+
+      if (canvas && canvas.width > 0 && canvas.height > 0) {
+        try {
+          const ctx = canvas.getContext('2d');
+          const p = ctx.getImageData(0, 0, 1, 1).data;
+          const allTransparent = (p[0] === 0 && p[1] === 0 && p[2] === 0 && p[3] === 0);
+          if (allTransparent && safeScale > 1) {
+            const retry = await html2canvas(target, {
+              backgroundColor: '#ffffff',
+              scale: 1,
+              useCORS: true,
+              logging: false,
+              allowTaint: true,
+            });
+            return retry || canvas;
+          }
+        } catch (_) { /* ignore */ }
+      }
       return canvas;
     } finally {
-      if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
     }
+  }
+
+  function scopeCSSRules(rawCSS, rootSelector) {
+    if (!rawCSS) return '';
+    return rawCSS.replace(/(^|\})\s*([^{]+?)\s*\{/g, function (match, p1, p2) {
+      const selectors = p2.split(',').map(s => s.trim()).filter(Boolean)
+        .map(s => `${rootSelector} ${s.replace(/^html\b|^body\b/gi, '')}`).join(', ');
+      return p1 + ' ' + selectors + ' {';
+    });
   }
 
   async function exportRangeViaImagePDF(dates) {
