@@ -1,6 +1,6 @@
 {
-  "name": "状态巡检记录",
-  "short_name": "状态记录",
+  "name": "SCC Patrol Record",
+  "short_name": "SCC Patrol",
   "description": "每小时状态打卡记录应用（GMT时间），支持勾叉状态、Note备注、异常高亮、提醒与PDF导出",
   "lang": "zh-CN",
   "dir": "ltr",
@@ -13,7 +13,7 @@
   "theme_color": "#1976d2",
   "apple-mobile-web-app-capable": "yes",
   "apple-mobile-web-app-status-bar-style": "black-translucent",
-  "apple-mobile-web-app-title": "状态记录",
+  "apple-mobile-web-app-title": "SCC Patrol",
   "prefer_related_applications": false,
   "categories": ["productivity", "utilities", "business"],
   "icons": [

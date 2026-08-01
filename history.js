@@ -34,7 +34,7 @@
       const s = localStorage.getItem(STORAGE_KEY_SETTINGS);
       if (s) return JSON.parse(s);
     } catch (e) { /* ignore */ }
-    return { highlightColor: '#ffeb3b', timeRangeMinutes: 30, outOfRangeHighlight: true, reminderEnabled: true, pdfTitle: '状态巡检记录', pdfExportDays: 7, fontSize: 'medium' };
+    return { highlightColor: '#ffeb3b', timeRangeMinutes: 30, outOfRangeHighlight: true, reminderEnabled: true, pdfTitle: 'SCC Patrol Record', pdfExportDays: 7, fontSize: 'medium' };
   }
 
   function loadCategories() {
@@ -401,7 +401,7 @@
 
   // ===== PDF Export =====
   function buildPDFHTML(date, hours, title) {
-    const title_text = title || (settings.pdfTitle || '状态巡检记录');
+    const title_text = title || (settings.pdfTitle || 'SCC Patrol Record');
     const dateObj = new Date(date + 'T00:00:00Z');
     const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
     const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
@@ -484,14 +484,14 @@
     </thead>
     <tbody>${rowsHTML}</tbody>
   </table>
-  <div class="footer">状态记录系统 · 共 ${hours.length} 小时记录</div>
+  <div class="footer">SCC Patrol Record · 共 ${hours.length} 小时记录</div>
   <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 300); }<\/script>
 </body></html>`;
   }
 
   function exportSingleDay(date) {
     const data = collectDateData(date);
-    const html = buildPDFHTML(date, data, settings.pdfTitle || '状态巡检记录');
+    const html = buildPDFHTML(date, data, settings.pdfTitle || 'SCC Patrol Record');
     const win = window.open('', '_blank');
     if (!win) { showSnackbar('请允许弹窗以导出'); return; }
     win.document.write(html);
@@ -500,7 +500,7 @@
 
   function exportRange(startStr, endStr) {
     const dates = getDateRange(startStr, endStr);
-    const title = settings.pdfTitle || '状态巡检记录';
+    const title = settings.pdfTitle || 'SCC Patrol Record';
 
     // 每天单独一个表格块，打印时每块占一页
     let dayBlocks = '';
@@ -606,7 +606,7 @@
   <h1>${title} · 历史汇总</h1>
   <div class="subtitle">日期范围: ${startStr} 至 ${endStr} (GMT) · 共 ${dates.length} 天 · 填写率 ${totalStatuses > 0 ? Math.round((filledStatuses/totalStatuses)*100) : 0}%</div>
   ${dayBlocks}
-  <div class="footer">状态记录系统 · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div>
+  <div class="footer">SCC Patrol Record · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div>
   <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); }<\/script>
 </body></html>`;
 
@@ -764,6 +764,17 @@
     startSel.addEventListener('change', validateRange);
     endSel.addEventListener('change', validateRange);
 
+    // 选择改变时立即保存习惯到 localStorage（不需要点导出也能保存）
+    function saveQuickExportHabit() {
+      settings.quickExportStart = startSel.value;
+      settings.quickExportEnd = endSel.value;
+      try {
+        localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+      } catch (e) {}
+    }
+    startSel.addEventListener('change', saveQuickExportHabit);
+    endSel.addEventListener('change', saveQuickExportHabit);
+
     // 导出按钮
     btn.addEventListener('click', () => {
       const start = startSel.value;
@@ -788,6 +799,14 @@
   // ===== Init =====
   function init() {
     document.getElementById('btn-back').addEventListener('click', () => {
+      // 返回前保存一键导出习惯
+      const qs = document.getElementById('quick-export-start');
+      const qe = document.getElementById('quick-export-end');
+      if (qs && qe) {
+        settings.quickExportStart = qs.value;
+        settings.quickExportEnd = qe.value;
+        try { localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings)); } catch (e) {}
+      }
       window.location.href = 'index.html';
     });
 
@@ -819,7 +838,7 @@
 
     // Clear All History
     document.getElementById('btn-clear-history').addEventListener('click', () => {
-      showDialog('清除全部历史', '确定要清除所有日期的状态记录吗？此操作不可恢复！类别设置将保留。', () => {
+      showDialog('清除全部历史', '确定要清除所有日期的SCC Patrol Record 数据吗？此操作不可恢复！类别设置将保留。', () => {
         showDialog('再次确认', '⚠️ 最后确认：将永久删除所有历史记录数据，确定继续？', () => {
           records = {};
           saveRecords();

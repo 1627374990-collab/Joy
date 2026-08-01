@@ -17,7 +17,7 @@
     reminderQuietStart: 0,
     reminderQuietEnd: 6,
     browserNotify: false,
-    pdfTitle: '状态巡检记录',
+    pdfTitle: 'SCC Patrol Record',
     parents: [],
     oneClickName: '一键打卡',
     oneClickPreset: {
@@ -550,7 +550,7 @@
     document.getElementById('enable-highlight').checked = settings.outOfRangeHighlight;
     document.getElementById('enable-reminder').checked = settings.reminderEnabled !== false;
     document.getElementById('enable-browser-notify').checked = settings.browserNotify === true;
-    document.getElementById('pdf-title').value = settings.pdfTitle || '状态巡检记录';
+    document.getElementById('pdf-title').value = settings.pdfTitle || 'SCC Patrol Record';
     document.getElementById('one-click-name').value = settings.oneClickName || '一键打卡';
 
     // Fill quiet hour options (0-24, whole hours)
@@ -743,7 +743,7 @@
     // Clear all
     document.getElementById('btn-clear-all').addEventListener('click', () => {
       showDialog('清除全部数据', '确定要清除所有日期的记录吗？此操作不可恢复！', () => {
-        showDialog('再次确认', '再次确认：将删除所有状态记录（不包括类别设置），确定继续？', () => {
+        showDialog('再次确认', '再次确认：将删除所有SCC Patrol Record 数据（不包括类别设置），确定继续？', () => {
           localStorage.removeItem(STORAGE_KEY_RECORDS);
           showSnackbar('所有记录已清除');
         });

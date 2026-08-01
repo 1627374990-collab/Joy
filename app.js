@@ -22,7 +22,7 @@
     reminderQuietStart: 0,
     reminderQuietEnd: 6,
     reminderLeadMinutes: 5,
-    pdfTitle: '状态巡检记录',
+    pdfTitle: 'SCC Patrol Record',
     parents: [],
     oneClickName: '一键打卡',
     oneClickPreset: {
@@ -509,7 +509,7 @@
     dateEl.textContent = '今日记录 (GMT)';
     const fullDate = getFullDateString(currentDate);
     document.getElementById('date-full').textContent = fullDate;
-    document.title = `状态记录 · ${currentDate}`;
+    document.title = `SCC Patrol Record · ${currentDate}`;
   }
 
   function renderPendingCount() {
@@ -1106,7 +1106,7 @@
 
   function exportRangeAsPDF(startStr, endStr) {
     const dates = getDateRangeApp(startStr, endStr);
-    const title = settings.pdfTitle || '状态巡检记录';
+    const title = settings.pdfTitle || 'SCC Patrol Record';
     let dayBlocks = '';
     let totalStatuses = 0;
     let filledStatuses = 0;
@@ -1150,7 +1150,7 @@
       const pageBreak = dayIdx < dates.length - 1 ? 'page-break-after: always;' : '';
       dayBlocks += `<div class="day-page" style="${pageBreak}"><div class="day-page-header" style="font-size:14px;font-weight:bold;margin-bottom:6px;padding:4px 8px;background:#e3f2fd;border-radius:4px;">📅 ${dateLabel} (GMT)</div><table><thead><tr><th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">时间</th>${catHeaders}<th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">Note</th><th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">填入</th></tr><tr>${subHeaders}</tr></thead><tbody>${rowsHTML}</tbody></table></div>`;
     });
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title} - ${startStr} 至 ${endStr}</title><style>body{font-family:-apple-system,"Microsoft YaHei",sans-serif;padding:10mm;color:#333;}h1{font-size:18px;margin-bottom:4px;}.subtitle{color:#666;font-size:12px;margin-bottom:12px;}table{border-collapse:collapse;width:100%;font-size:10px;table-layout:fixed;}th,td{border:1px solid #333;word-wrap:break-word;overflow:hidden;}.footer{margin-top:12px;font-size:10px;color:#888;text-align:right;}@page{size:A4 portrait;margin:8mm;}@media print{.day-page{page-break-after:always;}.day-page:last-child{page-break-after:auto;}body{padding:8mm;}}</style></head><body><h1>${title} · 历史汇总</h1><div class="subtitle">日期范围: ${startStr} 至 ${endStr} (GMT) · 共 ${dates.length} 天 · 填写率 ${totalStatuses > 0 ? Math.round((filledStatuses/totalStatuses)*100) : 0}%</div>${dayBlocks}<div class="footer">状态记录系统 · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div><script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script></body></html>`;
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title} - ${startStr} 至 ${endStr}</title><style>body{font-family:-apple-system,"Microsoft YaHei",sans-serif;padding:10mm;color:#333;}h1{font-size:18px;margin-bottom:4px;}.subtitle{color:#666;font-size:12px;margin-bottom:12px;}table{border-collapse:collapse;width:100%;font-size:10px;table-layout:fixed;}th,td{border:1px solid #333;word-wrap:break-word;overflow:hidden;}.footer{margin-top:12px;font-size:10px;color:#888;text-align:right;}@page{size:A4 portrait;margin:8mm;}@media print{.day-page{page-break-after:always;}.day-page:last-child{page-break-after:auto;}body{padding:8mm;}}</style></head><body><h1>${title} · 历史汇总</h1><div class="subtitle">日期范围: ${startStr} 至 ${endStr} (GMT) · 共 ${dates.length} 天 · 填写率 ${totalStatuses > 0 ? Math.round((filledStatuses/totalStatuses)*100) : 0}%</div>${dayBlocks}<div class="footer">SCC Patrol Record · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div><script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script></body></html>`;
     const win = window.open('', '_blank');
     if (!win) { showSnackbar('请允许弹窗以导出'); return; }
     win.document.write(html);
@@ -1203,7 +1203,7 @@
   }
 
   function generatePDFHTML(date, hours) {
-    const title = settings.pdfTitle || '状态巡检记录';
+    const title = settings.pdfTitle || 'SCC Patrol Record';
     const dateObj = new Date(date + 'T00:00:00Z');
     const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
     const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
@@ -1276,7 +1276,7 @@
     </thead>
     <tbody>${rowsHTML}</tbody>
   </table>
-  <div class="footer">状态记录系统 · 共 ${hours.length} 小时记录</div>
+  <div class="footer">SCC Patrol Record · 共 ${hours.length} 小时记录</div>
   <script>window.onload = function() { setTimeout(function(){ window.print(); }, 300); }<\/script>
 </body></html>`;
   }
@@ -1407,7 +1407,7 @@
             const recentlyNotified = sessionStorage.getItem('last_notification_' + today + '_' + nextHour);
             if (!recentlyNotified) {
               try {
-                new Notification('状态记录提醒', {
+                new Notification('SCC Patrol Record 提醒', {
                   body: `时段 ${nextHour}:00 尚未填写，请及时记录`,
                   tag: 'status-reminder-' + today + '-' + nextHour,
                 });
