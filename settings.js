@@ -6,11 +6,9 @@
   const STORAGE_KEY_CATEGORIES = 'status_categories_v1';
   const STORAGE_KEY_RECORDS = 'status_records_v1';
 
-  let settings = loadSettings();
-  let categories = loadCategories();
-  let workingCategories = JSON.parse(JSON.stringify(categories)); // editable copy
-
   // ===== Storage Helpers =====
+  // ⚠️ DEFAULT_SETTINGS 必须在 loadSettings() 调用之前定义，
+  //    否则 const 的暂时性死区（TDZ）会导致 ReferenceError，整个设置页功能瘫痪。
   const DEFAULT_SETTINGS = {
     highlightColor: '#ffeb3b',
     timeRangeMinutes: 30,
@@ -29,6 +27,10 @@
     columnWidths: {}, // key: 'catId_subId' or 'hour'/'note'/'time'/'del', value: px number
     defaultColWidth: 80,
   };
+
+  let settings = loadSettings();
+  let categories = loadCategories();
+  let workingCategories = JSON.parse(JSON.stringify(categories)); // editable copy
 
   function loadSettings() {
     try {
