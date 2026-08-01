@@ -9,9 +9,49 @@
   const STORAGE_KEY_CATEGORIES = 'status_categories_v1';
 
   const DEFAULT_CATEGORIES = [
-    { id: 'health', name: '身体', subStatuses: [{ id: 'sleep', name: '睡眠' }, { id: 'mood', name: '情绪' }] },
-    { id: 'work', name: '工作', subStatuses: [] },
-    { id: 'study', name: '学习', subStatuses: [] },
+    // ===== SCC Patrol Record 默认配置 =====
+    // 检查内容1: TMs Fresh — 平台及设备: Open SCC, DFH-4, DFH-4E, DFH3B
+    //   Open SCC: 7, M&C
+    //   DFH-4:   9, 6C, DPM, IC, MCS, SCC
+    //   DFH-4E:  6D, DPM, IC, MCS
+    //   DFH3B:   6E
+    // 检查内容2: Unrecoverd Alarm ? If so,please specify — 平台及设备: Open SCC, DFH-4, DFH-4E, DFH3B
+    //   Open SCC:  7, M&C
+    //   DFH-4:    9, 6C, DPM, IC, MCS, SCC
+    //   DFH-4E:   6D, DPM, IC, MCS
+    //   DFH3B:    6E
+    { id: 'cat_tms_ossc',   name: 'Open SCC',   parentId: 'p_tmf', subStatuses: [
+      { id: 's_7',   name: '7' },   { id: 's_mc',  name: 'M&C' },
+    ]},
+    { id: 'cat_tms_dfh4',   name: 'DFH-4', parentId: 'p_tmf', subStatuses: [
+      { id: 's_9',   name: '9' },   { id: 's_6c',  name: '6C' },
+      { id: 's_dpm', name: 'DPM' },  { id: 's_ic',  name: 'IC' },
+      { id: 's_mcs', name: 'MCS' },  { id: 's_scc', name: 'SCC' },
+    ]},
+    { id: 'cat_tms_dfh4e',  name: 'DFH-4E', parentId: 'p_tmf', subStatuses: [
+      { id: 's_6d',  name: '6D' },   { id: 's_dpm', name: 'DPM' },
+      { id: 's_ic',  name: 'IC' },   { id: 's_mcs', name: 'MCS' },
+      { id: 's_scc', name: 'SCC' },
+    ]},
+    { id: 'cat_tms_dfh3b',  name: 'DFH3B', parentId: 'p_tmf', subStatuses: [
+      { id: 's_6e',  name: '6E' },
+    ]},
+    { id: 'cat_ua_ossc',    name: 'Open SCC',   parentId: 'p_ua', subStatuses: [
+      { id: 's_7',   name: '7' },   { id: 's_mc',  name: 'M&C' },
+    ]},
+    { id: 'cat_ua_dfh4',    name: 'DFH-4', parentId: 'p_ua', subStatuses: [
+      { id: 's_9',   name: '9' },   { id: 's_6c',  name: '6C' },
+      { id: 's_dpm', name: 'DPM' },  { id: 's_ic',  name: 'IC' },
+      { id: 's_mcs', name: 'MCS' },  { id: 's_scc', name: 'SCC' },
+    ]},
+    { id: 'cat_ua_dfh4e',   name: 'DFH-4E', parentId: 'p_ua', subStatuses: [
+      { id: 's_6d',  name: '6D' },   { id: 's_dpm', name: 'DPM' },
+      { id: 's_ic',  name: 'IC' },   { id: 's_mcs', name: 'MCS' },
+      { id: 's_scc', name: 'SCC' },
+    ]},
+    { id: 'cat_ua_dfh3b',   name: 'DFH3B', parentId: 'p_ua', subStatuses: [
+      { id: 's_6e',  name: '6E' },
+    ]},
   ];
 
   const DEFAULT_SETTINGS = {
@@ -23,14 +63,39 @@
     reminderQuietEnd: 6,
     reminderLeadMinutes: 5,
     pdfTitle: 'SCC Patrol Record',
-    parents: [],
+    parents: [
+      { id: 'p_tmf', name: 'TMs Fresh' },
+      { id: 'p_ua',  name: 'Unrecoverd Alarm ? If so,please specify' },
+    ],
     oneClickName: '一键打卡',
     oneClickPreset: {
       status: '✓',
-      targets: null, // null = all; otherwise { catId: { subId: true/false } }
+      targets: null,
+      parentTargets: null,
     },
-    columnWidths: {},
-    defaultColWidth: 80,
+    columnWidths: {
+      // TMs Fresh
+      'cat_tms_ossc_s_7': 50,   'cat_tms_ossc_s_mc': 55,
+      'cat_tms_dfh4_s_9':  45,  'cat_tms_dfh4_s_6c': 50,
+      'cat_tms_dfh4_s_dpm': 50, 'cat_tms_dfh4_s_ic': 45,
+      'cat_tms_dfh4_s_mcs': 50, 'cat_tms_dfh4_s_scc': 45,
+      'cat_tms_dfh4e_s_6d': 50, 'cat_tms_dfh4e_s_dpm': 50,
+      'cat_tms_dfh4e_s_ic': 45, 'cat_tms_dfh4e_s_mcs': 50,
+      'cat_tms_dfh4e_s_scc': 45,
+      'cat_tms_dfh3b_s_6e': 50,
+      // Unrecoverd Alarm ? If so,please specify
+      'cat_ua_ossc_s_7':   50,  'cat_ua_ossc_s_mc': 55,
+      'cat_ua_dfh4_s_9':   45,  'cat_ua_dfh4_s_6c': 50,
+      'cat_ua_dfh4_s_dpm': 50,  'cat_ua_dfh4_s_ic': 45,
+      'cat_ua_dfh4_s_mcs': 50,  'cat_ua_dfh4_s_scc': 45,
+      'cat_ua_dfh4e_s_6d': 50,  'cat_ua_dfh4e_s_dpm': 50,
+      'cat_ua_dfh4e_s_ic': 45,  'cat_ua_dfh4e_s_mcs': 50,
+      'cat_ua_dfh4e_s_scc': 45,
+      'cat_ua_dfh3b_s_6e': 50,
+      // Fixed columns
+      'hour': 75, 'note': 120, 'time': 80, 'del': 32,
+    },
+    defaultColWidth: 60,
     pdfExportDays: 7,
     fontSize: 'medium',
   };
