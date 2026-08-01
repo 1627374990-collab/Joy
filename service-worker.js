@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.4.0-resize-font-export';
+  const VERSION = 'v1.5.0-colwidth-del-export';
   const CACHE_PREFIX = 'status-recorder-';
   const STATIC_CACHE = CACHE_PREFIX + 'static-' + VERSION;
   const RUNTIME_CACHE = CACHE_PREFIX + 'runtime-' + VERSION;

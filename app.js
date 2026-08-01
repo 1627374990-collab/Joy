@@ -288,25 +288,37 @@
     const allTargets = () => Array.from(document.querySelectorAll(`[data-col-key="${CSS.escape(key)}"]`));
 
     // 统一的「写入宽度到 DOM」函数（合并 rAF，避免 60Hz 内多次 layout）
-    function applyWidth(width) {
-      pendingWidth = width;
-      if (rafPending) return;
-      rafPending = true;
-      (window.requestAnimationFrame || ((cb) => setTimeout(cb, 16)))(() => {
-        rafPending = false;
-        const w = pendingWidth;
-        column.style.width = w + 'px';
-        column.style.minWidth = w + 'px';
-        column.style.maxWidth = w + 'px';
-        const nodes = allTargets();
-        for (let i = 0; i < nodes.length; i++) {
-          const n = nodes[i];
-          if (n === column) continue;
-          n.style.width = w + 'px';
-          n.style.minWidth = w + 'px';
-          n.style.maxWidth = w + 'px';
-        }
+    function applyWidth(newWidth) {
+      let MIN = 40, MAX = 600;
+      if (key === 'hour') { MIN = 60; MAX = 130; }
+      if (key === 'del') { MIN = 28; MAX = 60; }
+      if (key === 'time') { MIN = 70; MAX = 180; }
+      if (key === 'note') { MIN = 80; MAX = 500; }
+      const clamped = Math.max(MIN, Math.min(MAX, Math.round(newWidth)));
+
+      // Write to colgroup col (single source of truth)
+      const colEl = document.querySelector(`colgroup#status-colgroup col[data-col-key="${CSS.escape(key)}"]`);
+      if (colEl) { colEl.style.width = clamped + 'px'; }
+
+      // Update all THs/TDs with this col-key
+      document.querySelectorAll(`[data-col-key="${CSS.escape(key)}"]`).forEach(el => {
+        el.style.width = clamped + 'px';
+        el.style.minWidth = clamped + 'px';
+        el.style.maxWidth = clamped + 'px';
       });
+
+      // Sync total table width
+      const tableEl = document.getElementById('status-table') || document.querySelector('.status-table');
+      if (tableEl) {
+        const colEls = document.querySelectorAll('colgroup#status-colgroup col');
+        let total = 0;
+        colEls.forEach(c => {
+          const k = c.dataset.colKey;
+          total += (k === key) ? clamped : getColumnWidth(k);
+        });
+        tableEl.style.width = total + 'px';
+        tableEl.style.minWidth = total + 'px';
+      }
     }
 
     function recalcTableWidth() {
@@ -597,6 +609,48 @@
     // Collect the "bottom-most header row" columns (the concrete per-data columns) for resizer attachment
     const resizerTargets = []; // array of { thElement, colKey }
 
+    // ===== Build ordered list of ALL concrete data columns (bottom-level only) =====
+    const allConcreteColKeys = [];
+    allConcreteColKeys.push('hour');
+    orderedCats.forEach(cat => {
+      if (cat.subStatuses && cat.subStatuses.length > 0) {
+        cat.subStatuses.forEach(sub => {
+          allConcreteColKeys.push(getColumnKey('category', cat.id, sub.id));
+        });
+      } else {
+        allConcreteColKeys.push(getColumnKey('category', cat.id));
+      }
+    });
+    allConcreteColKeys.push('note');
+    allConcreteColKeys.push('time');
+    allConcreteColKeys.push('del');
+
+    // ===== Build colgroup as the SINGLE source of truth for column widths =====
+    const table = document.getElementById('status-table') || document.querySelector('.status-table');
+    const colgroup = document.createElement('colgroup');
+    colgroup.id = 'status-colgroup';
+    allConcreteColKeys.forEach(key => {
+      const col = document.createElement('col');
+      col.dataset.colKey = key;
+      const w = getColumnWidth(key);
+      col.style.width = w + 'px';
+      colgroup.appendChild(col);
+    });
+    if (table) {
+      const existingColgroup = table.querySelector('colgroup');
+      if (existingColgroup) existingColgroup.remove();
+      table.insertBefore(colgroup, table.firstChild || null);
+    }
+
+    // ===== Compute explicit total table width =====
+    const totalWidth = allConcreteColKeys.reduce((s, k) => s + getColumnWidth(k), 0);
+    if (table) {
+      table.style.width = totalWidth + 'px';
+      table.style.minWidth = totalWidth + 'px';
+      table.style.maxWidth = 'none';
+      table.style.tableLayout = 'fixed';
+    }
+
     // Row 1: hour + parents/categories + Note + time + delete
     const headerTr = document.createElement('tr');
 
@@ -648,7 +702,6 @@
 
     const thDel = document.createElement('th');
     thDel.className = 'del-cell';
-    thDel.textContent = '操作';
     thDel.rowSpan = headerRows;
     applyColumnWidth(thDel, 'del');
     headerTr.appendChild(thDel);
@@ -734,20 +787,19 @@
       // Simpler: do it during a second pass below
     }
 
-    // ===== Second pass: attach resizer targets for category columns when no subs =====
-    if (!hasSubs) {
-      const targetHeaderRowEls = hasParents
-        ? Array.from(catHeaderRow.children) // category row THs
-        : Array.from(headerTr.children).filter(c => c !== thHour && c !== thNote && c !== thTime && c !== thDel); // cat cols in first row
-      orderedCats.forEach((cat, i) => {
-        const colKey = getColumnKey('category', cat.id);
-        const theCol = targetHeaderRowEls[i];
-        if (theCol) {
-          applyColumnWidth(theCol, colKey);
-          resizerTargets.push({ th: theCol, key: colKey });
-        }
-      });
-    }
+    // ===== FINAL PASS: Attach resizer to BOTTOM-MOST row of every concrete column =====
+    const allHeaderRows = Array.from(head.querySelectorAll('tr'));
+    const bottomHeaderRow = allHeaderRows[allHeaderRows.length - 1];
+    const bottomRowTHs = Array.from(bottomHeaderRow.children);
+    allConcreteColKeys.forEach((key, colIdx) => {
+      const th = bottomRowTHs[colIdx];
+      if (!th) return;
+      th.dataset.colKey = key;
+      const w = getColumnWidth(key);
+      th.style.width = w + 'px';
+      th.style.minWidth = w + 'px';
+      resizerTargets.push({ th, key });
+    });
 
     const now = getNow();
     const today = getGMTDateString(now);
@@ -1033,20 +1085,88 @@
     return filledCount;
   }
 
-  // ===== PDF Export =====
+  // ===== PDF Export (uses quick-export habit) =====
   async function exportPDF() {
+    const start = settings.quickExportStart;
+    const end = settings.quickExportEnd;
+    if (start && end && start <= end) {
+      showSnackbar(`正在导出: ${start} 至 ${end}`);
+      setTimeout(() => exportRangeAsPDF(start, end), 400);
+      return;
+    }
     const date = currentDate;
     const data = collectDayData(date);
-
     const win = window.open('', '_blank');
     if (!win) { showSnackbar('请允许弹窗以导出 PDF'); return; }
-
     const html = generatePDFHTML(date, data);
     win.document.write(html);
     win.document.close();
-    win.onload = function () {
-      setTimeout(() => { win.print(); }, 500);
-    };
+    win.onload = function () { setTimeout(() => { win.print(); }, 500); };
+  }
+
+  function exportRangeAsPDF(startStr, endStr) {
+    const dates = getDateRangeApp(startStr, endStr);
+    const title = settings.pdfTitle || '状态巡检记录';
+    let dayBlocks = '';
+    let totalStatuses = 0;
+    let filledStatuses = 0;
+    dates.forEach((date, dayIdx) => {
+      const data = collectDayData(date);
+      const dateObj = new Date(date + 'T00:00:00Z');
+      const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
+      let catHeaders = '';
+      categories.forEach(cat => {
+        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
+        catHeaders += `<th colspan="${subs.length}" style="border:1px solid #333;padding:4px;background:#e8f0fe;font-weight:bold;font-size:10px;">${cat.name}</th>`;
+      });
+      let subHeaders = '';
+      categories.forEach(cat => {
+        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: '' }];
+        subs.forEach(sub => {
+          subHeaders += `<th style="border:1px solid #333;padding:3px;font-size:9px;background:#f5f5f5;">${sub.name || '●'}</th>`;
+        });
+      });
+      let rowsHTML = '';
+      data.forEach(row => {
+        let statusCells = '';
+        categories.forEach(cat => {
+          const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
+          subs.forEach(sub => {
+            const key = sub.id;
+            const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
+            const status = ed ? ed.status : '';
+            if (status !== STATUS_EMPTY) filledStatuses++;
+            totalStatuses++;
+            const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
+            statusCells += `<td style="border:1px solid #333;padding:3px 2px;text-align:center;font-size:11px;color:${color};">${status || ''}</td>`;
+          });
+        });
+        const timeStr = getLatestTimeString(row);
+        const note = row.note || '';
+        const rowBg = parseInt(row.hour) % 2 === 0 ? 'background:#fafafa;' : '';
+        rowsHTML += `<tr style="${rowBg}"><td style="border:1px solid #333;padding:3px 5px;font-size:11px;font-weight:bold;">${row.hour}:00</td>${statusCells}<td style="border:1px solid #333;padding:3px;font-size:10px;max-width:100px;word-break:break-word;">${note}</td><td style="border:1px solid #333;padding:3px;font-size:10px;color:#666;text-align:right;">${timeStr}</td></tr>`;
+      });
+      const pageBreak = dayIdx < dates.length - 1 ? 'page-break-after: always;' : '';
+      dayBlocks += `<div class="day-page" style="${pageBreak}"><div class="day-page-header" style="font-size:14px;font-weight:bold;margin-bottom:6px;padding:4px 8px;background:#e3f2fd;border-radius:4px;">📅 ${dateLabel} (GMT)</div><table><thead><tr><th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">时间</th>${catHeaders}<th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">Note</th><th rowspan="2" style="border:1px solid #333;padding:4px;background:#e8f0fe;">填入</th></tr><tr>${subHeaders}</tr></thead><tbody>${rowsHTML}</tbody></table></div>`;
+    });
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title} - ${startStr} 至 ${endStr}</title><style>body{font-family:-apple-system,"Microsoft YaHei",sans-serif;padding:10mm;color:#333;}h1{font-size:18px;margin-bottom:4px;}.subtitle{color:#666;font-size:12px;margin-bottom:12px;}table{border-collapse:collapse;width:100%;font-size:10px;table-layout:fixed;}th,td{border:1px solid #333;word-wrap:break-word;overflow:hidden;}.footer{margin-top:12px;font-size:10px;color:#888;text-align:right;}@page{size:A4 portrait;margin:8mm;}@media print{.day-page{page-break-after:always;}.day-page:last-child{page-break-after:auto;}body{padding:8mm;}}</style></head><body><h1>${title} · 历史汇总</h1><div class="subtitle">日期范围: ${startStr} 至 ${endStr} (GMT) · 共 ${dates.length} 天 · 填写率 ${totalStatuses > 0 ? Math.round((filledStatuses/totalStatuses)*100) : 0}%</div>${dayBlocks}<div class="footer">状态记录系统 · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div><script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script></body></html>`;
+    const win = window.open('', '_blank');
+    if (!win) { showSnackbar('请允许弹窗以导出'); return; }
+    win.document.write(html);
+    win.document.close();
+  }
+
+  function getDateRangeApp(startStr, endStr) {
+    const dates = [];
+    const start = new Date(startStr + 'T00:00:00Z');
+    const end = new Date(endStr + 'T00:00:00Z');
+    const cur = new Date(start);
+    while (cur <= end) {
+      dates.push(getGMTDateString(cur));
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+    return dates;
   }
 
   function collectDayData(date) {
