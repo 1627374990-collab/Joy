@@ -400,7 +400,8 @@
   }
 
   // ===== PDF Export =====
-  // Build PDF table header matching main page layout (parent → category → sub-status)
+  // Build PDF table header + <colgroup> with explicit per-column pixel widths
+  // (required for WebKit / Safari printing to never squish columns)
   function buildPDFTableHeader() {
     const parents = Array.isArray(settings.parents)
       ? settings.parents.filter(p => p && p.name && p.name.trim())
@@ -426,9 +427,30 @@
     groups.forEach(g => g.cats.forEach(c => orderedCats.push(c)));
     const headerRows = hasParents ? 3 : 2;
 
-    // Row 1: hour + parent headers (or cat headers if no parents) + note + time
+    // Flatten all columns with explicit pixel widths (same logic as app.js)
+    const cw = (settings && settings.columnWidths) || {};
+    const defW = (settings && settings.defaultColWidth) || 50;
+    const colWidths = [];
+    colWidths.push(cw.hour || 75);
+    orderedCats.forEach(cat => {
+      const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
+      subs.forEach(sub => {
+        const k = cat.id + '_' + sub.id;
+        colWidths.push(cw[k] || defW);
+      });
+    });
+    colWidths.push(cw.note || 120);
+    colWidths.push(cw.time || 80);
+    let colgroup = '<colgroup>';
+    colWidths.forEach(w => { colgroup += `<col style="width:${w}px">`; });
+    colgroup += '</colgroup>';
+    const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+
+    const noWrapBase = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal;overflow-wrap:normal;';
+
+    // Row 1: hour + parent headers (or cat headers) + note + time
     let row1 = '<tr>';
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;color:#1976d2;font-weight:700;text-align:left;">时间</th>`;
+    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;color:#1976d2;font-weight:700;text-align:left;${noWrapBase}">时间</th>`;
     if (hasParents) {
       groups.forEach((g, gi) => {
         let colCount = 0;
@@ -438,17 +460,17 @@
         });
         const div = gi > 0 ? 'border-left:3px solid #1976d2;' : '';
         const bg = g.parent.color || '#e8f0fe';
-        row1 += `<th colspan="${colCount}" style="border:1px solid #333;padding:5px 4px;background:${bg};font-weight:700;font-size:10px;color:#1565c0;text-align:center;${div}">${g.parent.name}</th>`;
+        row1 += `<th colspan="${colCount}" style="border:1px solid #333;padding:5px 4px;background:${bg};font-weight:700;font-size:10px;color:#1565c0;text-align:center;${div}${noWrapBase}">${g.parent.name}</th>`;
       });
     } else {
       orderedCats.forEach((cat) => {
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
         const bg = cat.color || '#e8f0fe';
-        row1 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:5px 4px;background:${bg};font-weight:700;font-size:10px;">${cat.name}</th>`;
+        row1 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:5px 4px;background:${bg};font-weight:700;font-size:10px;${noWrapBase}">${cat.name}</th>`;
       });
     }
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;font-weight:700;">Note</th>`;
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;font-weight:700;">填入</th>`;
+    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;font-weight:700;${noWrapBase}">Note</th>`;
+    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;font-weight:700;${noWrapBase}">填入</th>`;
     row1 += '</tr>';
 
     // Row 2: category headers (only if has parents)
@@ -460,7 +482,7 @@
         const prevCat = i > 0 ? orderedCats[i - 1] : null;
         const div = (i > 0 && effPid(cat) !== effPid(prevCat)) ? 'border-left:3px solid #1976d2;' : '';
         const bg = cat.color || '#e8f0fe';
-        row2 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:4px;background:${bg};font-weight:bold;font-size:10px;${div}">${cat.name}</th>`;
+        row2 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:4px;background:${bg};font-weight:bold;font-size:10px;${div}${noWrapBase}">${cat.name}</th>`;
       });
       row2 += '</tr>';
     }
@@ -472,7 +494,7 @@
       const prevCat = i > 0 ? orderedCats[i - 1] : null;
       subs.forEach((sub, subi) => {
         const div = (subi === 0 && i > 0 && hasParents && effPid(cat) !== effPid(prevCat)) ? 'border-left:3px solid #1976d2;' : '';
-        subRow += `<th style="border:1px solid #333;padding:3px 2px;font-size:9px;background:#f0f4f8;color:#666;font-weight:500;${div}">${sub.name || '●'}</th>`;
+        subRow += `<th style="border:1px solid #333;padding:3px 2px;font-size:9px;background:#f0f4f8;color:#666;font-weight:500;${div}${noWrapBase}">${sub.name || '●'}</th>`;
       });
     });
     subRow += '</tr>';
@@ -481,15 +503,59 @@
     if (hasParents) thead += row2;
     thead += subRow + '</thead>';
 
-    return { thead, orderedCats, hasParents, effPid };
+    return { thead, colgroup, totalWidth, orderedCats, hasParents, effPid, noWrapBase };
+  }
+
+  // Robust print CSS (A4 landscape with explicit mm sizes)
+  function buildPrintCSSBase(totalWidth) {
+    const scale = Math.min(1, 1063 / (totalWidth || 1063));
+    return {
+      headExtra:
+        '<meta name="viewport" content="width=1200,initial-scale=1">' +
+        '<meta http-equiv="X-UA-Compatible" content="IE=edge">',
+      styleTag: `<style>
+@page { size: 297mm 210mm; margin: 8mm; }
+@page :first { size: 297mm 210mm; margin: 8mm; }
+@page :left  { size: 297mm 210mm; margin: 8mm; }
+@page :right { size: 297mm 210mm; margin: 8mm; }
+* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
+html, body { margin: 0; padding: 0; color: #333; font-family: -apple-system, "Microsoft YaHei", BlinkMacSystemFont, "Segoe UI", sans-serif; }
+html { width: 297mm; }
+body { width: 297mm; padding: 8mm; }
+h1 { font-size: 18px; margin: 0 0 4px 0; }
+.subtitle { color: #666; font-size: 12px; margin: 0 0 12px 0; }
+.day-page { width: 281mm; margin: 0; padding: 0; }
+.day-page + .day-page { margin-top: 0; }
+.day-page-header { font-size: 14px; font-weight: bold; margin: 0 0 6px 0; padding: 4px 8px; background: #e3f2fd; border-radius: 4px; }
+.day-page-date { color: #1565c0; }
+.pdf-wrap { width: ${totalWidth}px; max-width: 100%; transform-origin: top left; }
+table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${totalWidth}px; max-width: 100%; table-layout: fixed; font-size: 10px; }
+table.pdf-table th, table.pdf-table td {
+  border: 1px solid #333;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  word-break: normal; overflow-wrap: normal;
+}
+.note-cell { white-space: normal !important; word-break: break-word !important; }
+.footer { margin-top: 12px; font-size: 10px; color: #888; text-align: right; width: 281mm; }
+@media print {
+  @page { size: 297mm 210mm; margin: 8mm; }
+  html { width: 297mm !important; }
+  body { width: 297mm !important; padding: 8mm !important; }
+  .day-page { page-break-after: always; break-after: page; }
+  .day-page:last-child { page-break-after: auto; break-after: auto; }
+  .pdf-wrap { transform: scale(${scale}); }
+  .noprint { display: none !important; }
+}
+</style>`,
+    };
   }
 
   function buildPDFHTML(date, hours) {
-    const title = 'SCC Patrol Record';
     const dateObj = new Date(date + 'T00:00:00Z');
     const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
     const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
-    const { thead: pdfThead, orderedCats, hasParents, effPid } = buildPDFTableHeader();
+    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, effPid, noWrapBase } = buildPDFTableHeader();
+    const css = buildPrintCSSBase(totalWidth);
 
     let rowsHTML = '';
     hours.forEach(row => {
@@ -504,7 +570,7 @@
           const status = ed ? ed.status : '';
           const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
           const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-          statusCells += `<td style="border:1px solid #333;padding:4px 2px;text-align:center;font-size:12px;color:${color};${div}">${status || ''}</td>`;
+          statusCells += `<td style="border:1px solid #333;padding:4px 2px;text-align:center;font-size:12px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
         });
       });
 
@@ -519,41 +585,35 @@
       if (row.noteTimestamp && (!latest || row.noteTimestamp > latest)) latest = row.noteTimestamp;
       const timeStr = latest ? getTimestampString(latest) : '';
 
-      const note = row.note || '';
+      const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const rowClass = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
 
       rowsHTML += `<tr style="${rowClass}">
-        <td style="border:1px solid #333;padding:4px 6px;font-weight:bold;font-size:11px;color:#1976d2;">${row.hour}:00</td>
+        <td style="border:1px solid #333;padding:4px 6px;font-weight:bold;font-size:11px;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
         ${statusCells}
-        <td style="border:1px solid #333;padding:4px;font-size:11px;max-width:120px;word-break:break-word;">${note}</td>
-        <td style="border:1px solid #333;padding:4px;font-size:10px;color:#666;text-align:right;">${timeStr}</td>
+        <td class="note-cell" style="border:1px solid #333;padding:4px;font-size:11px;word-break:break-word;white-space:normal;">${note}</td>
+        <td style="border:1px solid #333;padding:4px;font-size:10px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
       </tr>`;
     });
 
     return `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>${title} - ${date}</title>
-<style>
-  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; padding: 20px; color: #333; }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  .subtitle { color: #666; font-size: 13px; margin-bottom: 16px; }
-  table { border-collapse: collapse; width: 100%; font-size: 11px; }
-  th, td { border: 1px solid #333; }
-  .footer { margin-top: 20px; font-size: 11px; color: #888; text-align: right; }
-  @page { size: A4 landscape; margin: 8mm; }
-  @media print {
-    body { padding: 8mm; }
-    button { display: none; }
-  }
-</style></head>
-<body>
-  <h1>${title}</h1>
-  <div class="subtitle">日期: ${dateLabel} (GMT) · 生成时间: ${getGMTTimeString(getNow())} GMT</div>
-  <table>
+<html><head>
+<meta charset="UTF-8">
+<title>SCC Patrol Record - ${date}</title>
+${css.headExtra}
+${css.styleTag}
+</head><body>
+<h1>SCC Patrol Record</h1>
+<div class="subtitle">日期: ${dateLabel} (GMT) · 生成时间: ${getGMTTimeString(getNow())} GMT</div>
+<div class="pdf-wrap">
+  <table class="pdf-table">
+    ${colgroup}
     ${pdfThead}
     <tbody>${rowsHTML}</tbody>
   </table>
-  <div class="footer">SCC Patrol Record · 共 ${hours.length} 小时记录</div>
-  <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 300); }<\/script>
+</div>
+<div class="footer">SCC Patrol Record · 共 ${hours.length} 小时记录</div>
+<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 500); }<\/script>
 </body></html>`;
   }
 
@@ -562,14 +622,15 @@
     const html = buildPDFHTML(date, data);
     const win = window.open('', '_blank');
     if (!win) { showSnackbar('请允许弹窗以导出'); return; }
+    win.document.open();
     win.document.write(html);
     win.document.close();
   }
 
   function exportRange(startStr, endStr) {
     const dates = getDateRange(startStr, endStr);
-    const title = 'SCC Patrol Record';
-    const { thead: pdfThead, orderedCats, hasParents, effPid } = buildPDFTableHeader();
+    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, effPid, noWrapBase } = buildPDFTableHeader();
+    const css = buildPrintCSSBase(totalWidth);
 
     let dayBlocks = '';
     let totalStatuses = 0;
@@ -596,7 +657,7 @@
             totalStatuses++;
             const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
             const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-            statusCells += `<td style="border:1px solid #333;padding:3px 2px;text-align:center;font-size:11px;color:${color};${div}">${status || ''}</td>`;
+            statusCells += `<td style="border:1px solid #333;padding:3px 2px;text-align:center;font-size:11px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
           });
         });
         let latest = null;
@@ -609,13 +670,13 @@
         });
         if (row.noteTimestamp && (!latest || row.noteTimestamp > latest)) latest = row.noteTimestamp;
         const timeStr = latest ? getTimestampString(latest) : '';
-        const note = row.note || '';
+        const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         const rowBg = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
         rowsHTML += `<tr style="${rowBg}">
-          <td style="border:1px solid #333;padding:3px 5px;font-size:11px;font-weight:bold;color:#1976d2;">${row.hour}:00</td>
+          <td style="border:1px solid #333;padding:3px 5px;font-size:11px;font-weight:bold;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
           ${statusCells}
-          <td style="border:1px solid #333;padding:3px;font-size:10px;max-width:100px;word-break:break-word;">${note}</td>
-          <td style="border:1px solid #333;padding:3px;font-size:10px;color:#666;text-align:right;">${timeStr}</td>
+          <td class="note-cell" style="border:1px solid #333;padding:3px;font-size:10px;word-break:break-word;white-space:normal;">${note}</td>
+          <td style="border:1px solid #333;padding:3px;font-size:10px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
         </tr>`;
       });
 
@@ -625,47 +686,38 @@
         <div class="day-page-header">
           <span class="day-page-date">📅 ${dateLabel} (GMT)</span>
         </div>
-        <table>
-          ${pdfThead}
-          <tbody>${rowsHTML}</tbody>
-        </table>
+        <div class="pdf-wrap">
+          <table class="pdf-table">
+            ${colgroup}
+            ${pdfThead}
+            <tbody>${rowsHTML}</tbody>
+          </table>
+        </div>
       </div>`;
     });
 
     const html = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>${title} - ${startStr} 至 ${endStr}</title>
-<style>
-  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; padding: 10mm; color: #333; }
-  h1 { font-size: 18px; margin-bottom: 4px; }
-  .subtitle { color: #666; font-size: 12px; margin-bottom: 12px; }
-  .day-page { margin-bottom: 0; }
-  .day-page + .day-page { margin-top: 0; }
-  .day-page-header { font-size: 14px; font-weight: bold; margin-bottom: 6px; padding: 4px 8px; background: #e3f2fd; border-radius: 4px; }
-  .day-page-date { color: #1565c0; }
-  table { border-collapse: collapse; width: 100%; font-size: 10px; table-layout: fixed; }
-  th, td { border: 1px solid #333; word-wrap: break-word; overflow: hidden; }
-  .footer { margin-top: 12px; font-size: 10px; color: #888; text-align: right; }
-  @page { size: A4 landscape; margin: 8mm; }
-  @media print {
-    body { padding: 8mm; }
-    .day-page { page-break-after: always; }
-    .day-page:last-child { page-break-after: auto; }
-  }
-</style></head>
-<body>
-  <h1>${title}·历史汇总</h1>
-  <div class="subtitle">日期范围: ${startStr} 至 ${endStr} (GMT) · 共 ${dates.length} 天 · 填写率 ${totalStatuses > 0 ? Math.round((filledStatuses/totalStatuses)*100) : 0}%</div>
-  ${dayBlocks}
-  <div class="footer">SCC Patrol Record · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div>
-  <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); }<\/script>
+<html><head>
+<meta charset="UTF-8">
+<title>SCC Patrol Record - ${startStr} 至 ${endStr}</title>
+${css.headExtra}
+${css.styleTag}
+</head><body>
+<h1>SCC Patrol Record·历史汇总</h1>
+<div class="subtitle">日期范围: ${startStr} 至 ${endStr} (GMT) · 共 ${dates.length} 天 · 填写率 ${totalStatuses > 0 ? Math.round((filledStatuses/totalStatuses)*100) : 0}%</div>
+${dayBlocks}
+<div class="footer">SCC Patrol Record · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div>
+<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 500); }<\/script>
 </body></html>`;
 
     const win = window.open('', '_blank');
     if (!win) { showSnackbar('请允许弹窗以导出'); return; }
+    win.document.open();
     win.document.write(html);
     win.document.close();
   }
 
+  // Dead code kept for reference; replaced by buildPDFTableHeader
   function buildCatHeaders() {
     let html = '';
     categories.forEach(cat => {
