@@ -1224,7 +1224,7 @@
 
     // Row 1: hour + parent headers (or cat headers if no parents) + note + time
     let row1 = '<tr>';
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;color:#1976d2;font-weight:700;text-align:left;${noWrapBase}">时间</th>`;
+    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:7px 8px;background:#e8f0fe;color:#1976d2;font-weight:700;text-align:left;font-size:14px;${noWrapBase}">时间</th>`;
     if (hasParents) {
       groups.forEach((g, gi) => {
         let colCount = 0;
@@ -1234,17 +1234,17 @@
         });
         const div = gi > 0 ? 'border-left:3px solid #1976d2;' : '';
         const bg = g.parent.color || '#e8f0fe';
-        row1 += `<th colspan="${colCount}" style="border:1px solid #333;padding:5px 4px;background:${bg};font-weight:700;font-size:10px;color:#1565c0;text-align:center;${div}${noWrapBase}">${g.parent.name}</th>`;
+        row1 += `<th colspan="${colCount}" style="border:1px solid #333;padding:7px 5px;background:${bg};font-weight:700;font-size:13px;color:#1565c0;text-align:center;${div}${noWrapBase}">${g.parent.name}</th>`;
       });
     } else {
       orderedCats.forEach((cat) => {
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
         const bg = cat.color || '#e8f0fe';
-        row1 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:5px 4px;background:${bg};font-weight:700;font-size:10px;${noWrapBase}">${cat.name}</th>`;
+        row1 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:7px 5px;background:${bg};font-weight:700;font-size:13px;${noWrapBase}">${cat.name}</th>`;
       });
     }
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;font-weight:700;${noWrapBase}">Note</th>`;
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:5px;background:#e8f0fe;font-weight:700;${noWrapBase}">填入</th>`;
+    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:7px;background:#e8f0fe;font-weight:700;font-size:13px;${noWrapBase}">Note</th>`;
+    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:7px;background:#e8f0fe;font-weight:700;font-size:13px;${noWrapBase}">填入</th>`;
     row1 += '</tr>';
 
     // Row 2: category headers (only if has parents)
@@ -1256,7 +1256,7 @@
         const prevCat = i > 0 ? orderedCats[i - 1] : null;
         const div = (i > 0 && effPid(cat) !== effPid(prevCat)) ? 'border-left:3px solid #1976d2;' : '';
         const bg = cat.color || '#e8f0fe';
-        row2 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:4px;background:${bg};font-weight:bold;font-size:10px;${div}${noWrapBase}">${cat.name}</th>`;
+        row2 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:5px 4px;background:${bg};font-weight:bold;font-size:12px;${div}${noWrapBase}">${cat.name}</th>`;
       });
       row2 += '</tr>';
     }
@@ -1268,7 +1268,7 @@
       const prevCat = i > 0 ? orderedCats[i - 1] : null;
       subs.forEach((sub, subi) => {
         const div = (subi === 0 && i > 0 && hasParents && effPid(cat) !== effPid(prevCat)) ? 'border-left:3px solid #1976d2;' : '';
-        subRow += `<th style="border:1px solid #333;padding:3px 2px;font-size:9px;background:#f0f4f8;color:#666;font-weight:500;${div}${noWrapBase}">${sub.name || '●'}</th>`;
+        subRow += `<th style="border:1px solid #333;padding:5px 3px;font-size:11px;background:#f0f4f8;color:#555;font-weight:500;${div}${noWrapBase}">${sub.name || '●'}</th>`;
       });
     });
     subRow += '</tr>';
@@ -1277,16 +1277,32 @@
     if (hasParents) thead += row2;
     thead += subRow + '</thead>';
 
-    return { thead, colgroup, totalWidth, orderedCats, hasParents, effPid, noWrapBase };
+    return { thead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase };
   }
 
   // Build robust print CSS template (A4 landscape with millimeter sizes)
-  // + optional <colgroup>, + <thead> - guaranteed not to squish columns on WebKit/Safari
-  function buildPrintCSSBase(totalWidth) {
+  // Centered on every page + enlarged fonts/padding. Scale considers BOTH page
+  // width and page height so a 24-hour day still fits on a single page.
+  function buildPrintCSSBase(totalWidth, rowCount, headerRows) {
     // A4 landscape: 297mm x 210mm. Content area with 8mm margins = 281mm x 194mm
-    // 96 dpi => 281mm ≈ 1063px. We emit explicit @page with size in mm (more reliable than "landscape" keyword on iOS)
-    const scale = Math.min(1, 1063 / (totalWidth || 1063));
+    const pxPerMm = 96 / 25.4;            // 3.7795
+    const contentWpx = 281 * pxPerMm;     // ~1063px
+    const contentHpx = 194 * pxPerMm;     // ~734px
+    const W = totalWidth || contentWpx;
+    const rc = rowCount || 24;
+    const hr = headerRows || 2;
+    // Conservative row-height estimates (match the bumped inline styles below)
+    const headerRowH = 30;
+    const dataRowH = 32;
+    const estHeight = hr * headerRowH + rc * dataRowH;
+    const scaleByW = contentWpx / W;
+    const scaleByH = contentHpx / estHeight;
+    // Allow enlarging small tables up to 1.12x, but never overflow width or height
+    const scale = Math.max(0.4, Math.min(scaleByW, scaleByH, 1.12));
+    const scaledW = W * scale;
     return {
+      scale,
+      scaledWidth: scaledW,
       headExtra:
         '<meta name="viewport" content="width=1200,initial-scale=1">' +
         '<meta http-equiv="X-UA-Compatible" content="IE=edge">',
@@ -1299,28 +1315,31 @@
 html, body { margin: 0; padding: 0; color: #333; font-family: -apple-system, "Microsoft YaHei", BlinkMacSystemFont, "Segoe UI", sans-serif; }
 html { width: 297mm; }
 body { width: 297mm; padding: 8mm; }
-h1 { font-size: 18px; margin: 0 0 4px 0; }
-.subtitle { color: #666; font-size: 12px; margin: 0 0 12px 0; }
-.day-page { width: 281mm; margin: 0; padding: 0; }
+h1 { font-size: 20px; margin: 0 0 4px 0; text-align: center; }
+.subtitle { color: #666; font-size: 13px; margin: 0 0 12px 0; text-align: center; }
+/* holder: sized to the SCALED width, centered via auto margins on every page */
+.pdf-holder { width: ${scaledW}px; margin: 0 auto; }
+.day-page { width: 281mm; margin: 0 auto; padding: 0; }
 .day-page + .day-page { margin-top: 0; }
-.day-page-header { font-size: 14px; font-weight: bold; margin: 0 0 6px 0; padding: 4px 8px; background: #e3f2fd; border-radius: 4px; }
+.day-page-header { font-size: 15px; font-weight: bold; margin: 0 auto 8px auto; padding: 5px 10px; background: #e3f2fd; border-radius: 4px; display: table; }
 .day-page-date { color: #1565c0; }
-.pdf-wrap { width: ${totalWidth}px; max-width: 100%; transform-origin: top left; }
-table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${totalWidth}px; max-width: 100%; table-layout: fixed; font-size: 10px; }
+.pdf-wrap { width: ${W}px; transform-origin: top left; }
+table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${W}px; table-layout: fixed; font-size: 13px; }
 table.pdf-table th, table.pdf-table td {
   border: 1px solid #333;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   word-break: normal; overflow-wrap: normal;
 }
 .note-cell { white-space: normal !important; word-break: break-word !important; }
-.footer { margin-top: 12px; font-size: 10px; color: #888; text-align: right; width: 281mm; }
+.footer { margin-top: 14px; font-size: 11px; color: #888; text-align: center; width: 100%; }
 @media print {
   @page { size: 297mm 210mm; margin: 8mm; }
   html { width: 297mm !important; }
   body { width: 297mm !important; padding: 8mm !important; }
   .day-page { page-break-after: always; break-after: page; }
   .day-page:last-child { page-break-after: auto; break-after: auto; }
-  .pdf-wrap { transform: scale(${scale}); }
+  .pdf-holder { width: ${scaledW}px; margin: 0 auto; }
+  .pdf-wrap { transform: scale(${scale}); transform-origin: top left; }
   .noprint { display: none !important; }
 }
 </style>`,
@@ -1330,8 +1349,8 @@ table.pdf-table th, table.pdf-table td {
   function exportRangeAsPDF(startStr, endStr) {
     const dates = getDateRangeApp(startStr, endStr);
     const title = 'SCC Patrol Record';
-    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, effPid, noWrapBase } = buildPDFTableHeader();
-    const css = buildPrintCSSBase(totalWidth);
+    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader();
+    const css = buildPrintCSSBase(totalWidth, 24, headerRows);
     let dayBlocks = '';
     let totalStatuses = 0;
     let filledStatuses = 0;
@@ -1355,29 +1374,29 @@ table.pdf-table th, table.pdf-table td {
             totalStatuses++;
             const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
             const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-            statusCells += `<td style="border:1px solid #333;padding:3px 2px;text-align:center;font-size:11px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
+            statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
           });
         });
         const timeStr = getLatestTimeString(row);
         const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         const rowBg = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
         rowsHTML += `<tr style="${rowBg}">
-          <td style="border:1px solid #333;padding:3px 5px;font-size:11px;font-weight:bold;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
+          <td style="border:1px solid #333;padding:6px 8px;font-size:13px;font-weight:bold;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
           ${statusCells}
-          <td class="note-cell" style="border:1px solid #333;padding:3px;font-size:10px;word-break:break-word;white-space:normal;">${note}</td>
-          <td style="border:1px solid #333;padding:3px;font-size:10px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
+          <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:12px;word-break:break-word;white-space:normal;">${note}</td>
+          <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
         </tr>`;
       });
       const pageBreak = dayIdx < dates.length - 1 ? 'page-break-after: always;' : '';
       dayBlocks += `<div class="day-page" style="${pageBreak}">
         <div class="day-page-header"><span class="day-page-date">📅 ${dateLabel} (GMT)</span></div>
-        <div class="pdf-wrap">
+        <div class="pdf-holder"><div class="pdf-wrap">
           <table class="pdf-table">
             ${colgroup}
             ${pdfThead}
             <tbody>${rowsHTML}</tbody>
           </table>
-        </div>
+        </div></div>
       </div>`;
     });
     const html = `<!DOCTYPE html>
@@ -1449,8 +1468,8 @@ ${dayBlocks}
     const dateObj = new Date(date + 'T00:00:00Z');
     const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
     const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
-    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, effPid, noWrapBase } = buildPDFTableHeader();
-    const css = buildPrintCSSBase(totalWidth);
+    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader();
+    const css = buildPrintCSSBase(totalWidth, hours.length, headerRows);
 
     let rowsHTML = '';
     hours.forEach(row => {
@@ -1465,7 +1484,7 @@ ${dayBlocks}
           const status = ed ? ed.status : '';
           const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
           const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-          statusCells += `<td style="border:1px solid #333;padding:4px 2px;text-align:center;font-size:12px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
+          statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
         });
       });
 
@@ -1474,10 +1493,10 @@ ${dayBlocks}
       const rowClass = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
 
       rowsHTML += `<tr style="${rowClass}">
-        <td style="border:1px solid #333;padding:4px 6px;font-weight:bold;font-size:11px;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
+        <td style="border:1px solid #333;padding:6px 8px;font-weight:bold;font-size:13px;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
         ${statusCells}
-        <td class="note-cell" style="border:1px solid #333;padding:4px;font-size:11px;word-break:break-word;white-space:normal;">${note}</td>
-        <td style="border:1px solid #333;padding:4px;font-size:10px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
+        <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:12px;word-break:break-word;white-space:normal;">${note}</td>
+        <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
       </tr>`;
     });
 
@@ -1490,13 +1509,13 @@ ${css.styleTag}
 </head><body>
 <h1>SCC Patrol Record</h1>
 <div class="subtitle">日期: ${dateLabel} (GMT) · 生成时间: ${getGMTTimeString(getNow())} GMT</div>
-<div class="pdf-wrap">
+<div class="pdf-holder"><div class="pdf-wrap">
   <table class="pdf-table">
     ${colgroup}
     ${pdfThead}
     <tbody>${rowsHTML}</tbody>
   </table>
-</div>
+</div></div>
 <div class="footer">SCC Patrol Record · 共 ${hours.length} 小时记录</div>
 <script>window.onload = function() { setTimeout(function(){ window.print(); }, 500); }<\/script>
 </body></html>`;
