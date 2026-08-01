@@ -1283,6 +1283,12 @@
   // Build robust print CSS template (A4 landscape with millimeter sizes)
   // Centered on every page + enlarged fonts/padding. Scale considers BOTH page
   // width and page height so a 24-hour day still fits on a single page.
+  // IMPORTANT: We use CSS `zoom` instead of `transform: scale()`.
+  // - `transform` does NOT change element's layout size in document flow.
+  //   Mobile browsers (iOS Safari) calculate page breaks/clipping based on
+  //   layout size, leading to truncated content.
+  // - `zoom` DOES change layout size (non-standard but widely supported in
+  //   Chrome/Safari), giving mobile browsers correct page dimensions.
   function buildPrintCSSBase(totalWidth, rowCount, headerRows) {
     // A4 landscape: 297mm x 210mm. Content area with 8mm margins = 281mm x 194mm
     const pxPerMm = 96 / 25.4;            // 3.7795
@@ -1323,7 +1329,8 @@ h1 { font-size: 20px; margin: 0 0 4px 0; text-align: center; }
 .day-page + .day-page { margin-top: 0; }
 .day-page-header { font-size: 15px; font-weight: bold; margin: 0 auto 8px auto; padding: 5px 10px; background: #e3f2fd; border-radius: 4px; display: table; }
 .day-page-date { color: #1565c0; }
-.pdf-wrap { width: ${W}px; transform-origin: top left; }
+/* Use CSS zoom for mobile compatibility. zoom changes layout size (unlike transform). */
+.pdf-wrap { width: ${W}px; zoom: ${scale}; -webkit-zoom: ${scale}; transform-origin: top left; }
 table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${W}px; table-layout: fixed; font-size: 13px; }
 table.pdf-table th, table.pdf-table td {
   border: 1px solid #333;
@@ -1339,7 +1346,8 @@ table.pdf-table th, table.pdf-table td {
   .day-page { page-break-after: always; break-after: page; }
   .day-page:last-child { page-break-after: auto; break-after: auto; }
   .pdf-holder { width: ${scaledW}px; margin: 0 auto; }
-  .pdf-wrap { transform: scale(${scale}); transform-origin: top left; }
+  /* CRITICAL: use zoom (not transform) for mobile PDF generation. */
+  .pdf-wrap { zoom: ${scale}; -webkit-zoom: ${scale}; }
   .noprint { display: none !important; }
 }
 </style>`,
