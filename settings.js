@@ -562,11 +562,22 @@
     qStart.value = settings.reminderQuietStart != null ? settings.reminderQuietStart : 0;
     qEnd.value = settings.reminderQuietEnd != null ? settings.reminderQuietEnd : 6;
 
+    // ===== 【关键】把 workingCategories 立即持久化到 categories + localStorage（避免"点添加后退回去就丢了"）=====
+    function syncWorkingCategoriesImmediately() {
+      try {
+        categories = JSON.parse(JSON.stringify(workingCategories));
+        saveCategories();
+      } catch (e) { /* ignore */ }
+    }
+
     // Event listeners
     document.getElementById('btn-back').addEventListener('click', () => {
-      // Save highlight settings (these are immediate)
+      // 1) 立即保存所有输入框的实时状态到 settings / workingCategories
       persistHighlightSettings();
-      window.location.href = 'index.html';
+      // 2) workingCategories（未按"保存类别更改"的那些）也直接写盘——用户改完要能看到效果
+      syncWorkingCategoriesImmediately();
+      // 3) 跳回主页面
+      try { window.location.href = 'index.html'; } catch (e) { history.back(); }
     });
 
     document.getElementById('highlight-color').addEventListener('input', (e) => {
@@ -582,28 +593,38 @@
     document.getElementById('enable-highlight').addEventListener('change', (e) => {
       settings.outOfRangeHighlight = e.target.checked;
       persistHighlightSettings();
+      showSnackbar('异常标注已' + (e.target.checked ? '开启' : '关闭'));
     });
 
     document.getElementById('enable-reminder').addEventListener('change', (e) => {
       settings.reminderEnabled = e.target.checked;
       persistHighlightSettings();
+      showSnackbar('整点提醒已' + (e.target.checked ? '开启' : '关闭'));
     });
 
     document.getElementById('quiet-start').addEventListener('change', (e) => {
-      settings.reminderQuietStart = parseInt(e.target.value);
+      settings.reminderQuietStart = parseInt(e.target.value, 10) || 0;
       persistHighlightSettings();
+      const padH = n => String(n).padStart(2, '0') + ':00';
+      showSnackbar(`安静时段: ${padH(settings.reminderQuietStart)} 至 ${padH(settings.reminderQuietEnd)}`);
     });
 
     document.getElementById('quiet-end').addEventListener('change', (e) => {
-      settings.reminderQuietEnd = parseInt(e.target.value);
+      settings.reminderQuietEnd = parseInt(e.target.value, 10) || 0;
       persistHighlightSettings();
+      const padH = n => String(n).padStart(2, '0') + ':00';
+      showSnackbar(`安静时段: ${padH(settings.reminderQuietStart)} 至 ${padH(settings.reminderQuietEnd)}`);
     });
 
     document.getElementById('enable-browser-notify').addEventListener('change', (e) => {
       settings.browserNotify = e.target.checked;
       persistHighlightSettings();
       if (e.target.checked && 'Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
+        Notification.requestPermission().then(() => {
+          showSnackbar('已请求系统通知权限');
+        }).catch(() => {});
+      } else {
+        showSnackbar('浏览器通知已' + (e.target.checked ? '开启' : '关闭'));
       }
     });
 
@@ -628,23 +649,43 @@
       persistHighlightSettings();
       renderParents();
       renderCategories();
+      renderPresetTargets();
+      showSnackbar(`已添加「检查内容」，共 ${settings.parents.length} 项`);
     });
 
     document.getElementById('btn-add-category').addEventListener('click', () => {
       const parentId = settings.parents.length > 0 ? settings.parents[0].id : null;
       workingCategories.push({ id: genId(), name: '新类别', parentId, color: '#f0f4f8', subStatuses: [] });
+      // 【关键】点击添加后立即写盘，用户退回去也能在表格里看到新列
+      syncWorkingCategoriesImmediately();
       renderCategories();
       renderPresetTargets();
+      showSnackbar(`已添加「新类别」，共 ${workingCategories.length} 项（可修改名称后再返回）`);
     });
 
     // Save category changes when user leaves or taps save
-    // Add global save button
+    // Add global save button (更突出 + 底部 safe-area 适配)
     const saveBar = document.createElement('div');
-    saveBar.style.cssText = 'position:sticky;bottom:10px;display:flex;gap:10px;margin-top:14px;';
+    saveBar.style.cssText = [
+      'position:sticky',
+      'bottom:calc(10px + env(safe-area-inset-bottom))',
+      'display:flex',
+      'gap:10px',
+      'margin-top:18px',
+      'z-index:25',
+      'padding:8px 2px 4px',
+      'background:linear-gradient(to top, #ffffff 70%, rgba(255,255,255,0.94))'
+    ].join(';');
     const saveBtn = document.createElement('button');
     saveBtn.className = 'btn btn-primary btn-block';
-    saveBtn.textContent = '保存类别更改';
-    saveBtn.addEventListener('click', saveCategoryChanges);
+    saveBtn.textContent = '💾 保存所有更改并返回';
+    saveBtn.style.minHeight = '52px';
+    saveBtn.style.fontSize = '16px';
+    saveBtn.style.fontWeight = '700';
+    saveBtn.addEventListener('click', () => {
+      // 先不弹确认直接存（已保存到 workingCategories，用户返回时再统一写盘）
+      saveCategoryChanges();
+    });
     saveBar.appendChild(saveBtn);
     document.querySelector('.settings-container').appendChild(saveBar);
 

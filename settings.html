@@ -24,9 +24,22 @@
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
     -webkit-tap-highlight-color: transparent;
-    overscroll-behavior-y: none;
+    overscroll-behavior-y: auto;
+    touch-action: manipulation;
   }
-  textarea, input, select { -webkit-appearance: none; appearance: none; }
+  /* 关键修复：iOS 上去除 appearance:none 会导致 select 完全无法点击/看不见下拉箭头；
+     现在只对输入框去除原生外观，select 保留原生下拉 + 自定义右侧箭头 */
+  input[type=text], input[type=number], input[type=date], input[type=time], textarea {
+    -webkit-appearance: none; appearance: none;
+  }
+  /* 所有可点击元素：移动端最小 44px 热区（HIG）*/
+  .btn, button, .back-btn, .preset-status-btn, select {
+    min-height: 44px !important;
+  }
+  input[type=text], input[type=number], input[type=date], input[type=time] {
+    min-height: 40px;
+    padding: 8px 10px;
+  }
 </style>
 <link rel="stylesheet" href="styles.css">
 <style>
@@ -35,38 +48,91 @@
     align-items: center;
     gap: 12px;
   }
+  /* ===== 返回按钮：放大、实心背景（确保用户能"看见+点得到"）===== */
   .back-btn {
-    font-size: 22px;
-    padding: 4px 10px;
-    background: rgba(255,255,255,0.2);
-    border-radius: 8px;
-    color: #fff;
+    font-size: 20px;
+    font-weight: 700;
+    padding: 0 16px;
+    min-width: 56px;
+    min-height: 44px;
+    background: #ffffff;
+    color: #1976d2;
+    border-radius: 12px;
+    border: 1px solid #bbdefb;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: rgba(25,118,210,0.15);
   }
-  .back-btn:active { background: rgba(255,255,255,0.3); }
+  .back-btn:active { background: #e3f2fd; transform: scale(0.97); }
+
   .range-display {
     font-size: 12px;
     color: #888;
     margin-top: 4px;
+    line-height: 1.5;
   }
-  .import-export textarea {
-    width: 100%;
-    min-height: 80px;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 8px;
-    font-size: 12px;
-    font-family: monospace;
-    margin-top: 8px;
-    resize: vertical;
+
+  /* select：iOS 原生下拉，自定义右侧下箭头 + 足够大的点击热区 */
+  select {
+    -webkit-appearance: none; appearance: none;
+    padding: 8px 36px 8px 12px;
+    min-height: 44px;
+    min-width: 96px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #ffffff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='M5 8l5 5 5-5' stroke='%23475569' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 12px center/12px 12px;
+    background-color: #ffffff;
+    font-size: 15px;
+    line-height: 1.3;
+    color: #0f172a;
   }
+  select:focus {
+    outline: 2px solid #90caf9;
+    outline-offset: 1px;
+    border-color: #1976d2;
+  }
+
+  /* 安静时段的两个 select 并排，整体更明显 */
+  .settings-range-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .settings-range-row select { flex: 1; }
+  .settings-range-row span { color: #64748b; font-size: 14px; }
+
+  /* 整块"导入导出 + 清除"隐藏 */
+  .import-export, .import-export + * { display: none !important; }
+  .import-export { display: none !important; }
+
   .count-badge {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
     background: #e3f2fd;
     color: #1976d2;
-    padding: 2px 8px;
+    padding: 2px 10px;
     border-radius: 10px;
-    font-size: 11px;
+    font-size: 12px;
     margin-left: 6px;
+    line-height: 1.6;
+  }
+
+  /* 检查内容 / 平台设备的按钮 + 输入框行高统一 */
+  .parent-item, .category-row {
+    min-height: 44px;
+  }
+  .parent-name-input, .category-name-input {
+    min-height: 42px !important;
+  }
+
+  /* 底部"保存类别更改"sticky 条，防止被键盘遮挡 */
+  .settings-container > [style*="position:sticky"] {
+    z-index: 20;
+    background: linear-gradient(to top, #ffffff 60%, rgba(255,255,255,0.9));
+    padding: 8px 2px 4px;
   }
 </style>
 </head>

@@ -24,9 +24,48 @@
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
     -webkit-tap-highlight-color: transparent;
-    overscroll-behavior-y: none;
+    overscroll-behavior-y: auto;
+    touch-action: manipulation;
   }
-  textarea, input, select { -webkit-appearance: none; appearance: none; }
+  /* iOS：只对输入框去除原生外观，date/select 保留可点击区域 */
+  input[type=text], input[type=number], textarea {
+    -webkit-appearance: none; appearance: none;
+  }
+  input[type=date] {
+    -webkit-appearance: none; appearance: none;
+    min-height: 42px;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background-color: #fff;
+  }
+  /* 所有可点击元素：最小 44px 热区（HIG）*/
+  .btn, button, .back-btn, select {
+    min-height: 44px !important;
+  }
+  .settings-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  /* 返回按钮：放大、实心背景（与 settings.html 保持一致）*/
+  .back-btn {
+    font-size: 20px;
+    font-weight: 700;
+    padding: 0 16px;
+    min-width: 56px;
+    min-height: 44px;
+    background: #ffffff;
+    color: #1976d2;
+    border-radius: 12px;
+    border: 1px solid #bbdefb;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: rgba(25,118,210,0.15);
+  }
+  .back-btn:active { background: #e3f2fd; transform: scale(0.97); }
 </style>
 <link rel="stylesheet" href="styles.css">
 </head>
