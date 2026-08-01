@@ -634,8 +634,202 @@ ${css.styleTag}
 </body></html>`;
   }
 
+  // ================================================================
+  // Image-based PDF export (html2canvas + jsPDF)
+  // This is the ONLY approach that reliably avoids content truncation
+  // on iOS Safari — the PDF contains plain bitmap images, so the
+  // browser never has to perform pagination / column layout math.
+  // ================================================================
+
+  function getDayPageStyles(totalWidth) {
+    return `<style>
+* { box-sizing: border-box; }
+body, html { margin: 0; padding: 0; background: #fff; font-family: -apple-system, "Microsoft YaHei", BlinkMacSystemFont, "Segoe UI", sans-serif; color: #333; }
+h1 { font-size: 22px; margin: 14px 0 4px; text-align: center; }
+.subtitle { color: #666; font-size: 13px; margin: 0 0 14px; text-align: center; }
+.day-page-header { font-size: 15px; font-weight: bold; margin: 0 auto 10px auto; padding: 5px 12px; background: #e3f2fd; border-radius: 4px; display: table; }
+.day-page-date { color: #1565c0; }
+.pdf-holder { width: ${totalWidth}px; margin: 0 auto; padding: 8px 10px; }
+table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${totalWidth}px; table-layout: fixed; font-size: 13px; }
+table.pdf-table th, table.pdf-table td {
+  border: 1px solid #333;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  word-break: normal; overflow-wrap: normal;
+}
+.note-cell { white-space: normal !important; word-break: break-word !important; }
+.day-root { width: ${totalWidth + 40}px; margin: 0 auto; background: #fff; padding: 10px 10px 18px; }
+</style>`;
+  }
+
+  function _getLatestTimeFromRow(row) {
+    let latest = null;
+    categories.forEach(cat => {
+      const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
+      subs.forEach(sub => {
+        const ed = row.entries[cat.id] ? row.entries[cat.id][sub.id] : null;
+        if (ed && ed.timestamp && (!latest || ed.timestamp > latest)) latest = ed.timestamp;
+      });
+    });
+    if (row.noteTimestamp && (!latest || row.noteTimestamp > latest)) latest = row.noteTimestamp;
+    return latest ? getTimestampString(latest) : '';
+  }
+
+  async function renderDayPageToCanvas(date, data, pdfTitle, headerInfo) {
+    const { thead, colgroup, totalWidth, orderedCats, hasParents, effPid, noWrapBase } = buildPDFTableHeader(1020);
+    const dateObj = new Date(date + 'T00:00:00Z');
+    const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
+
+    let rowsHTML = '';
+    data.forEach(row => {
+      let statusCells = '';
+      orderedCats.forEach((cat, ci) => {
+        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
+        const prevCat = ci > 0 ? orderedCats[ci - 1] : null;
+        const isNewGroup = hasParents && ci > 0 && effPid(cat) !== effPid(prevCat);
+        subs.forEach((sub, subi) => {
+          const key = sub.id;
+          const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
+          const status = ed ? ed.status : '';
+          const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
+          const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
+          statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
+        });
+      });
+      const timeStr = _getLatestTimeFromRow(row);
+      const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const rowBg = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
+      rowsHTML += `<tr style="${rowBg}">
+        <td style="border:1px solid #333;padding:6px 8px;font-size:13px;font-weight:bold;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
+        ${statusCells}
+        <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:12px;word-break:break-word;white-space:normal;">${note}</td>
+        <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
+      </tr>`;
+    });
+
+    const styles = getDayPageStyles(totalWidth);
+    const headerHTML = pdfTitle && headerInfo ? `<h1>${pdfTitle}</h1><div class="subtitle">${headerInfo}</div>` : '';
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">${styles}</head><body><div class="day-root">
+${headerHTML}
+<div class="day-page-header"><span class="day-page-date">📅 ${dateLabel} (GMT)</span></div>
+<div class="pdf-holder">
+  <table class="pdf-table">
+    ${colgroup}
+    ${thead}
+    <tbody>${rowsHTML}</tbody>
+  </table>
+</div>
+</div></body></html>`;
+
+    return await renderHTMLStringToCanvas(html);
+  }
+
+  async function renderHTMLStringToCanvas(htmlStr) {
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.left = '-99999px';
+    iframe.style.top = '0';
+    iframe.style.width = '3200px';
+    iframe.style.height = '3200px';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+    document.body.appendChild(iframe);
+    try {
+      const idoc = iframe.contentDocument;
+      idoc.open();
+      idoc.write(htmlStr);
+      idoc.close();
+      await new Promise(r => setTimeout(r, 350));
+      const target = idoc.body.querySelector('.day-root') || idoc.body;
+      const canvas = await html2canvas(target, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        ignoreElements: el => false,
+      });
+      return canvas;
+    } finally {
+      if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+    }
+  }
+
+  async function exportRangeViaImagePDF(dates) {
+    const { jsPDF } = jspdf;
+    const PAGE_W_MM = 297;
+    const PAGE_H_MM = 210;
+    const MARGIN_MM = 8;
+    const CONTENT_W_MM = PAGE_W_MM - 2 * MARGIN_MM;
+    const CONTENT_H_MM = PAGE_H_MM - 2 * MARGIN_MM;
+
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    let total = 0, filled = 0;
+
+    for (let i = 0; i < dates.length; i++) {
+      const date = dates[i];
+      const data = collectDateData(date);
+      data.forEach(row => {
+        categories.forEach(cat => {
+          const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [null];
+          subs.forEach(sub => {
+            const key = sub ? sub.id : '_main';
+            total++;
+            const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
+            if (ed && ed.status && ed.status !== '') filled++;
+          });
+        });
+      });
+
+      let pdfTitle = null, headerInfo = null;
+      if (i === 0) {
+        pdfTitle = dates.length > 1 ? 'SCC Patrol Record·历史汇总' : 'SCC Patrol Record';
+        if (dates.length > 1) {
+          const rate = total > 0 ? Math.round((filled / total) * 100) : 0;
+          headerInfo = `日期范围: ${dates[0]} 至 ${dates[dates.length - 1]} (GMT) · 共 ${dates.length} 天 · 填写率 ${rate}%`;
+        } else {
+          const dateObj = new Date(date + 'T00:00:00Z');
+          const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+          headerInfo = `日期: ${date} ${weekdays[dateObj.getUTCDay()]} (GMT) · 生成时间: ${getGMTTimeString(getNow())} GMT`;
+        }
+      }
+
+      const canvas = await renderDayPageToCanvas(date, data, pdfTitle, headerInfo);
+
+      if (i > 0) pdf.addPage();
+
+      const imgWpx = canvas.width, imgHpx = canvas.height;
+      const ratio = imgWpx / imgHpx;
+      let drawWmm = CONTENT_W_MM;
+      let drawHmm = drawWmm / ratio;
+      if (drawHmm > CONTENT_H_MM) {
+        drawHmm = CONTENT_H_MM;
+        drawWmm = drawHmm * ratio;
+      }
+      const x = MARGIN_MM + (CONTENT_W_MM - drawWmm) / 2;
+      const y = MARGIN_MM + (CONTENT_H_MM - drawHmm) / 2;
+
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      pdf.addImage(dataUrl, 'JPEG', x, y, drawWmm, drawHmm, undefined, 'FAST');
+    }
+
+    const fileDate = (dates.length > 1 ? `${dates[0]}-${dates[dates.length - 1]}` : dates[0]);
+    const filename = `SCC-Patrol-Record_${fileDate}.pdf`;
+    pdf.save(filename);
+    showSnackbar('PDF 已生成下载');
+  }
+
   function exportSingleDay(date) {
+    showSnackbar('正在生成 PDF...');
     const data = collectDateData(date);
+    if (typeof html2canvas === 'function' && window.jspdf && jspdf.jsPDF) {
+      exportRangeViaImagePDF([date]).catch(err => {
+        console.error(err);
+        showSnackbar('导出失败: ' + (err && err.message ? err.message : err));
+      });
+      return;
+    }
+    // Legacy fallback
     const html = buildPDFHTML(date, data);
     const win = window.open('', '_blank');
     if (!win) { showSnackbar('请允许弹窗以导出'); return; }
@@ -646,6 +840,15 @@ ${css.styleTag}
 
   function exportRange(startStr, endStr) {
     const dates = getDateRange(startStr, endStr);
+    if (typeof html2canvas === 'function' && window.jspdf && jspdf.jsPDF) {
+      showSnackbar(`正在生成 PDF (${dates.length} 天)...`);
+      exportRangeViaImagePDF(dates).catch(err => {
+        console.error(err);
+        showSnackbar('导出失败: ' + (err && err.message ? err.message : err));
+      });
+      return;
+    }
+    // Legacy fallback
     const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader(1020);
     const css = buildPrintCSSBase(totalWidth);
 
