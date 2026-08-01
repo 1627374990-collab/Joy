@@ -899,6 +899,28 @@ ${dayBlocks}
   }
 
   // ===== Init =====
+  // Helper: go back to main page with history.back() if possible (so pageshow fires on main)
+  function _goBackToMain() {
+    const rf = document.referrer || '';
+    const rfFile = rf.split('/').pop().split('#')[0].split('?')[0];
+    const canGoBack = (rfFile === 'index.html' || rfFile === 'settings.html' ||
+                      rfFile === '' || rf.endsWith('/') || rf.endsWith('/Joy') ||
+                      rf.endsWith('/Joy/'));
+    if (canGoBack && typeof history.back === 'function') {
+      history.back();
+      setTimeout(() => {
+        try {
+          if (document.visibilityState !== 'hidden' && !window.__navingAway) {
+            window.__navingAway = true;
+            window.location.replace('index.html');
+          }
+        } catch (e) {}
+      }, 350);
+    } else {
+      window.location.replace('index.html');
+    }
+  }
+
   function init() {
     document.getElementById('btn-back').addEventListener('click', () => {
       // 返回前保存一键导出习惯
@@ -909,7 +931,7 @@ ${dayBlocks}
         settings.quickExportEnd = qe.value;
         try { localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings)); } catch (e) {}
       }
-      window.location.href = 'index.html';
+      _goBackToMain();
     });
 
     const today = getTodayDate();
@@ -952,6 +974,36 @@ ${dayBlocks}
 
     // Auto-load initial range
     renderHistoryList(weekAgo, today);
+
+    // --------------------------------------------------------
+    // When returning from settings via history.back:
+    // re-read settings and re-render, so any changes are visible.
+    // --------------------------------------------------------
+    let _pendingReload = false;
+    function scheduleReload() {
+      if (_pendingReload) return;
+      _pendingReload = true;
+      setTimeout(() => {
+        _pendingReload = false;
+        try {
+          settings = loadSettings();
+          categories = loadCategories();
+          records = loadRecords();
+          // refresh quick-export dropdowns from settings
+          const s = document.getElementById('quick-export-start');
+          const e = document.getElementById('quick-export-end');
+          if (s && settings.quickExportStart) s.value = settings.quickExportStart;
+          if (e && settings.quickExportEnd) e.value = settings.quickExportEnd;
+          const start = document.getElementById('date-start').value || weekAgo;
+          const end = document.getElementById('date-end').value || today;
+          renderHistoryList(start, end);
+        } catch (e) { /* ignore */ }
+      }, 30);
+    }
+    window.addEventListener('pageshow', scheduleReload, { passive: true });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') scheduleReload();
+    }, { passive: true });
   }
 
   if (document.readyState === 'loading') {

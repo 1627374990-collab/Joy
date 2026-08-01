@@ -1567,6 +1567,51 @@ ${css.styleTag}
   }
 
   // ===== Render All =====
+  // Apply settings (font-size, highlight color, one-click label, etc.) to the live DOM
+  // - Must be idempotent: safe to call at init and any time we re-load from localStorage
+  // - Replaces the old "do it once inside init()" approach because returning from settings via
+  //   same-page navigation (location.href='index.html') / visibilitychange / pageshow needs to
+  //   re-apply everything, not just swap the `settings` object reference.
+  function applySettingsToDOM() {
+    // 1) Font size CSS var --fs
+    const fsMap = { 'small': 0.8, 'medium': 1.0, 'large': 1.3, 'xlarge': 1.6 };
+    const fs = settings.fontSize || 'medium';
+    document.documentElement.style.setProperty('--fs', String(fsMap[fs] || 1.0));
+
+    // 2) Highlight color: CSS var + legend dot
+    applyHighlightColor();
+    const legend = document.getElementById('legend-dot');
+    if (legend) legend.style.background = settings.highlightColor;
+
+    // 3) One-click button label (settings → 按钮文字)
+    const oneClickLabel = document.getElementById('one-click-label');
+    if (oneClickLabel) {
+      oneClickLabel.textContent = settings.oneClickName || '一键打卡';
+    }
+    // 3b) One-click button visibility / hint: if preset selects nothing, mark button as disabled-looking
+    const oneClickBtn = document.getElementById('btn-one-click');
+    const preset = settings.oneClickPreset || { status: '✓', targets: null, parentTargets: null };
+    let anyChecked = true;
+    if (preset.parentTargets && Object.keys(preset.parentTargets).length > 0) {
+      anyChecked = Object.values(preset.parentTargets).some(v => v !== false);
+    }
+    if (anyChecked && preset.targets && typeof preset.targets === 'object') {
+      const cats = Object.keys(preset.targets);
+      if (cats.length > 0) {
+        const hasAtLeastOne = cats.some(cid => {
+          const sub = preset.targets[cid];
+          if (!sub || typeof sub !== 'object') return true;
+          return Object.values(sub).some(v => v !== false);
+        });
+        anyChecked = hasAtLeastOne;
+      }
+    }
+    if (oneClickBtn) {
+      oneClickBtn.style.opacity = anyChecked ? '1' : '0.55';
+      oneClickBtn.title = anyChecked ? '' : '请在设置中勾选一键打卡的填入项';
+    }
+  }
+
   // 渲染：full=true 用于 初始化/pageshow/从设置返回/批量修改后 这种"必须重建DOM"的场景
   //       full=false（默认）只刷新轻量 UI（时钟/banner/待填/表头高亮），不重建表格，避免手机端反复 layout 卡顿
   let _lastHourHighlightDate = null;
@@ -1647,25 +1692,23 @@ ${css.styleTag}
   }
 
   // ===== Init =====
+  // Central reload: idempotently re-read settings/cats/records from storage,
+  // apply to DOM, and re-render. Called from init(), pageshow, visibilitychange.
+  function reloadAllAndRender(reason) {
+    settings = loadSettings();
+    categories = loadCategories();
+    records = loadRecords();
+    currentDate = getGMTDateString(getNow());
+    applySettingsToDOM();
+    renderAll(true);
+  }
+
   function init() {
     // Always use today's date
     currentDate = getTodayDate();
 
-    // Apply font size from settings
-    (function applyFontSize() {
-      const map = { 'small': 0.8, 'medium': 1.0, 'large': 1.3, 'xlarge': 1.6 };
-      const s = settings.fontSize || 'medium';
-      document.documentElement.style.setProperty('--fs', String(map[s] || 1.0));
-    })();
-
-    applyHighlightColor();
-    document.getElementById('legend-dot').style.background = settings.highlightColor;
-
-    // Set one-click button label from settings
-    const oneClickLabel = document.getElementById('one-click-label');
-    if (oneClickLabel) {
-      oneClickLabel.textContent = settings.oneClickName || '一键打卡';
-    }
+    // Apply all settings to DOM (font size, highlight color, one-click label, one-click preset state)
+    applySettingsToDOM();
 
     // Date is always today in GMT mode
     document.getElementById('current-date').addEventListener('click', () => {
@@ -1696,19 +1739,29 @@ ${css.styleTag}
     // Start clock
     updateClock();
 
-    // Setup reminder system (auto-refreshes every 5s, 不再 30s 无意义全表重绘)
+    // Setup reminder system (auto-refreshes every 5s)
     setupReminderSystem();
 
-    // 移除了原 setInterval(()=>{ renderAll() }, 30000) 的无意义全表重绘（避免手机端每 30 秒重建 ~1200+ 单元格导致明显卡顿/掉帧/发热）
-
-    // Auto-refresh when returning from settings/history (page shown again)
-    window.addEventListener('pageshow', () => {
-      settings = loadSettings();
-      categories = loadCategories();
-      records = loadRecords();
-      currentDate = getGMTDateString(getNow());
-      renderAll(true); // 从设置返回：类/顺序/颜色 都可能变，必须 full 重绘
-    });
+    // ------------------------------------------------------------------
+    // Auto-refresh when returning from settings/history:
+    //  1) pageshow - triggered on history.back() from settings/history (recommended route)
+    //  2) visibilitychange (hidden -> visible) - triggered when iOS Safari switches
+    //     from another tab/window back to PWA (pageshow may not fire in some cases)
+    // We use both to be robust, plus guard against duplicate render loops.
+    // ------------------------------------------------------------------
+    let _pendingReload = false;
+    function scheduleReload() {
+      if (_pendingReload) return;
+      _pendingReload = true;
+      setTimeout(() => {
+        _pendingReload = false;
+        reloadAllAndRender();
+      }, 30);
+    }
+    window.addEventListener('pageshow', scheduleReload, { passive: true });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') scheduleReload();
+    }, { passive: true });
   }
 
   // DOM ready
@@ -1721,11 +1774,7 @@ ${css.styleTag}
   // Expose
   window.StatusApp = {
     refresh: function () {
-      settings = loadSettings();
-      categories = loadCategories();
-      records = loadRecords();
-      currentDate = getGMTDateString(getNow());
-      renderAll();
+      reloadAllAndRender('expose');
     }
   };
 })();

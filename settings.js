@@ -373,6 +373,44 @@
   }
 
   // ===== Save Changes =====
+  // Go back to main page: prefer history.back() so pageshow fires on index.html and
+  // the main UI re-reads the just-saved settings. Falls back to direct location.href
+  // if the stack was empty (user opened settings directly).
+  function goBackToMain() {
+    try {
+      // Immediately sync both settings + workingCategories to storage before leaving
+      persistHighlightSettings();
+      try {
+        categories = JSON.parse(JSON.stringify(workingCategories));
+        saveCategories();
+      } catch (e) { /* ignore */ }
+      // If document.referrer ends with index.html / root / history.html we likely came
+      // from there via same-tab navigation -> history.back() will trigger their pageshow.
+      const rf = document.referrer || '';
+      const rfFile = rf.split('/').pop().split('#')[0].split('?')[0];
+      const canGoBack = (rfFile === 'index.html' || rfFile === 'history.html' ||
+                        rfFile === '' || rf.endsWith('/') || rf.endsWith('/Joy') ||
+                        rf.endsWith('/Joy/'));
+      if (canGoBack && typeof history.back === 'function') {
+        history.back();
+        // Fallback after 350ms if nothing happened (empty history stack)
+        setTimeout(() => {
+          try {
+            if (document.visibilityState !== 'hidden' &&
+                !window.__alreadyNavigatingAway) {
+              window.__alreadyNavigatingAway = true;
+              window.location.replace('index.html');
+            }
+          } catch (e) {}
+        }, 350);
+      } else {
+        window.location.replace('index.html');
+      }
+    } catch (e) {
+      try { window.location.replace('index.html'); } catch (ee) {}
+    }
+  }
+
   function saveCategoryChanges() {
     // Validate
     for (const cat of workingCategories) {
@@ -395,6 +433,8 @@
       saveCategories();
       renderPresetTargets();
       showSnackbar('设置已保存');
+      // After saving, also go back (so user sees the new structure on main table)
+      setTimeout(goBackToMain, 250);
     });
   }
 
@@ -630,12 +670,28 @@
 
     // Event listeners
     document.getElementById('btn-back').addEventListener('click', () => {
-      // 1) 立即保存所有输入框的实时状态到 settings / workingCategories
-      persistHighlightSettings();
-      // 2) workingCategories（未按"保存类别更改"的那些）也直接写盘——用户改完要能看到效果
-      syncWorkingCategoriesImmediately();
-      // 3) 跳回主页面
-      try { window.location.href = 'index.html'; } catch (e) { history.back(); }
+      // 1) immediately sync settings (already via oninput/onchange events, but double-check inputs):
+      try {
+        const hi = document.getElementById('highlight-color');
+        if (hi) settings.highlightColor = hi.value;
+        const tr = document.getElementById('time-range');
+        if (tr) settings.timeRangeMinutes = parseInt(tr.value, 10) || 30;
+        const eh = document.getElementById('enable-highlight');
+        if (eh) settings.outOfRangeHighlight = eh.checked;
+        const er = document.getElementById('enable-reminder');
+        if (er) settings.reminderEnabled = er.checked;
+        const ebn = document.getElementById('enable-browser-notify');
+        if (ebn) settings.browserNotify = ebn.checked;
+        const pt = document.getElementById('pdf-title');
+        if (pt) settings.pdfTitle = pt.value;
+        const ocn = document.getElementById('one-click-name');
+        if (ocn) settings.oneClickName = ocn.value;
+        const qs = document.getElementById('quiet-start');
+        if (qs) settings.reminderQuietStart = parseInt(qs.value, 10) || 0;
+        const qe = document.getElementById('quiet-end');
+        if (qe) settings.reminderQuietEnd = parseInt(qe.value, 10) || 0;
+      } catch (e) { /* ignore */ }
+      goBackToMain();
     });
 
     document.getElementById('highlight-color').addEventListener('input', (e) => {
