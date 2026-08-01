@@ -1169,9 +1169,11 @@
     win.onload = function () { setTimeout(() => { win.print(); }, 500); };
   }
 
-  // Build PDF table header + <colgroup> with explicit per-column pixel widths
-  // (required for WebKit / Safari printing to never squish columns when browser ignores @page landscape
-  function buildPDFTableHeader() {
+  // Build PDF table header + <colgroup> with explicit per-column pixel widths.
+  // Columns are PROPORTIONALLY scaled to fit within `maxWidth` (px) so the table
+  // is natively the right size — NO CSS zoom/transform needed. This is the only
+  // approach that works reliably on iOS Safari print-to-PDF.
+  function buildPDFTableHeader(maxWidth) {
     const parents = Array.isArray(settings.parents)
       ? settings.parents.filter(p => p && p.name && p.name.trim())
       : [];
@@ -1199,26 +1201,41 @@
     // Flatten all columns (hour + N sub-status cols + note + time), each with explicit px width
     const cw = (settings && settings.columnWidths) || {};
     const defW = (settings && settings.defaultColWidth) || 50;
-    const colWidths = [];
+    const rawWidths = [];
     const colKeys = [];
-    colWidths.push(cw.hour || 75);
+    rawWidths.push(cw.hour || 75);
     colKeys.push('hour');
     orderedCats.forEach(cat => {
       const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
       subs.forEach(sub => {
         const k = cat.id + '_' + sub.id;
-        colWidths.push(cw[k] || defW);
+        rawWidths.push(cw[k] || defW);
         colKeys.push(k);
       });
     });
-    colWidths.push(cw.note || 120);
+    rawWidths.push(cw.note || 120);
     colKeys.push('note');
-    colWidths.push(cw.time || 80);
+    rawWidths.push(cw.time || 80);
     colKeys.push('time');
+
+    // ---- KEY FIX: scale columns natively to fit page width ----
+    // A4 landscape content area ≈ 281mm ≈ 1063px at 96dpi. Use 1020px as a safe
+    // target (accounts for mobile rendering quirks). If table is much narrower
+    // than the page, enlarge columns up to 1.3x to fill the page.
+    const target = maxWidth || 1020;
+    const rawTotal = rawWidths.reduce((a, b) => a + b, 0);
+    let fitScale = 1;
+    if (rawTotal > target) {
+      fitScale = target / rawTotal;           // shrink to fit
+    } else if (rawTotal < target * 0.65) {
+      fitScale = Math.min(target / rawTotal, 1.3); // enlarge small tables
+    }
+    const colWidths = rawWidths.map(w => Math.round(w * fitScale));
+    const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+
     let colgroup = '<colgroup>';
     colWidths.forEach(w => { colgroup += `<col style="width:${w}px">`; });
     colgroup += '</colgroup>';
-    const totalWidth = colWidths.reduce((a, b) => a + b, 0);
 
     const noWrapBase = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal;overflow-wrap:normal;';
 
@@ -1280,35 +1297,11 @@
     return { thead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase };
   }
 
-  // Build robust print CSS template (A4 landscape with millimeter sizes)
-  // Centered on every page + enlarged fonts/padding. Scale considers BOTH page
-  // width and page height so a 24-hour day still fits on a single page.
-  // IMPORTANT: We use CSS `zoom` instead of `transform: scale()`.
-  // - `transform` does NOT change element's layout size in document flow.
-  //   Mobile browsers (iOS Safari) calculate page breaks/clipping based on
-  //   layout size, leading to truncated content.
-  // - `zoom` DOES change layout size (non-standard but widely supported in
-  //   Chrome/Safari), giving mobile browsers correct page dimensions.
-  function buildPrintCSSBase(totalWidth, rowCount, headerRows) {
-    // A4 landscape: 297mm x 210mm. Content area with 8mm margins = 281mm x 194mm
-    const pxPerMm = 96 / 25.4;            // 3.7795
-    const contentWpx = 281 * pxPerMm;     // ~1063px
-    const contentHpx = 194 * pxPerMm;     // ~734px
-    const W = totalWidth || contentWpx;
-    const rc = rowCount || 24;
-    const hr = headerRows || 2;
-    // Conservative row-height estimates (match the bumped inline styles below)
-    const headerRowH = 30;
-    const dataRowH = 32;
-    const estHeight = hr * headerRowH + rc * dataRowH;
-    const scaleByW = contentWpx / W;
-    const scaleByH = contentHpx / estHeight;
-    // Allow enlarging small tables up to 1.12x, but never overflow width or height
-    const scale = Math.max(0.4, Math.min(scaleByW, scaleByH, 1.12));
-    const scaledW = W * scale;
+  // Build print CSS for A4 landscape. NO zoom/transform — the table's column
+  // widths are already natively scaled by buildPDFTableHeader to fit the page.
+  // This is the only approach that works reliably on iOS Safari print-to-PDF.
+  function buildPrintCSSBase(totalWidth) {
     return {
-      scale,
-      scaledWidth: scaledW,
       headExtra:
         '<meta name="viewport" content="width=1200,initial-scale=1">' +
         '<meta http-equiv="X-UA-Compatible" content="IE=edge">',
@@ -1323,15 +1316,13 @@ html { width: 297mm; }
 body { width: 297mm; padding: 8mm; }
 h1 { font-size: 20px; margin: 0 0 4px 0; text-align: center; }
 .subtitle { color: #666; font-size: 13px; margin: 0 0 12px 0; text-align: center; }
-/* holder: sized to the SCALED width, centered via auto margins on every page */
-.pdf-holder { width: ${scaledW}px; margin: 0 auto; }
-.day-page { width: 281mm; margin: 0 auto; padding: 0; }
+.pdf-holder { width: ${totalWidth}px; margin: 0 auto; }
+.day-page { width: 100%; margin: 0 auto; padding: 0; }
 .day-page + .day-page { margin-top: 0; }
 .day-page-header { font-size: 15px; font-weight: bold; margin: 0 auto 8px auto; padding: 5px 10px; background: #e3f2fd; border-radius: 4px; display: table; }
 .day-page-date { color: #1565c0; }
-/* Use CSS zoom for mobile compatibility. zoom changes layout size (unlike transform). */
-.pdf-wrap { width: ${W}px; zoom: ${scale}; -webkit-zoom: ${scale}; transform-origin: top left; }
-table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${W}px; table-layout: fixed; font-size: 13px; }
+.pdf-wrap { width: ${totalWidth}px; }
+table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${totalWidth}px; table-layout: fixed; font-size: 13px; }
 table.pdf-table th, table.pdf-table td {
   border: 1px solid #333;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1345,9 +1336,6 @@ table.pdf-table th, table.pdf-table td {
   body { width: 297mm !important; padding: 8mm !important; }
   .day-page { page-break-after: always; break-after: page; }
   .day-page:last-child { page-break-after: auto; break-after: auto; }
-  .pdf-holder { width: ${scaledW}px; margin: 0 auto; }
-  /* CRITICAL: use zoom (not transform) for mobile PDF generation. */
-  .pdf-wrap { zoom: ${scale}; -webkit-zoom: ${scale}; }
   .noprint { display: none !important; }
 }
 </style>`,
@@ -1357,8 +1345,8 @@ table.pdf-table th, table.pdf-table td {
   function exportRangeAsPDF(startStr, endStr) {
     const dates = getDateRangeApp(startStr, endStr);
     const title = 'SCC Patrol Record';
-    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader();
-    const css = buildPrintCSSBase(totalWidth, 24, headerRows);
+    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader(1020);
+    const css = buildPrintCSSBase(totalWidth);
     let dayBlocks = '';
     let totalStatuses = 0;
     let filledStatuses = 0;
@@ -1476,8 +1464,8 @@ ${dayBlocks}
     const dateObj = new Date(date + 'T00:00:00Z');
     const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
     const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
-    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader();
-    const css = buildPrintCSSBase(totalWidth, hours.length, headerRows);
+    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader(1020);
+    const css = buildPrintCSSBase(totalWidth);
 
     let rowsHTML = '';
     hours.forEach(row => {
