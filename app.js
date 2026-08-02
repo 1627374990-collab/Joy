@@ -1161,18 +1161,7 @@
     }
     showSnackbar('正在生成 PDF...');
     try {
-      const date = currentDate;
-      const data = collectDayData(date);
-      if (typeof html2canvas === 'function' && window.jspdf && jspdf.jsPDF) {
-        await exportRangeViaImagePDF([date]);
-      } else {
-        // Fallback: legacy print window (may truncate on mobile Safari)
-        const win = window.open('', '_blank');
-        if (!win) { showSnackbar('请允许弹窗以导出 PDF'); return; }
-        win.document.write(generatePDFHTML(date, data));
-        win.document.close();
-        win.onload = function () { setTimeout(() => { win.print(); }, 500); };
-      }
+      await exportRangeViaCanvasPDF([currentDate]);
     } catch (err) {
       console.error(err);
       showSnackbar('导出失败: ' + (err && err.message ? err.message : err));
@@ -1180,218 +1169,327 @@
   }
 
   // ================================================================
-  // Image-based PDF export (html2canvas + jsPDF)
-  // This is the ONLY approach that reliably avoids content truncation
-  // on iOS Safari — the PDF contains plain bitmap images, so the
-  // browser never has to perform pagination / column layout math.
+  // Canvas-based PDF export — NO html2canvas, NO external CDN needed.
+  // We draw the table directly onto a <canvas> using 2D API, then feed
+  // the canvas image to jsPDF. This works on ALL devices including
+  // iPhone / iPad Safari because it uses only native canvas APIs.
   // ================================================================
 
-  // Build the <head> + styling for a day page that will be captured by
-  // html2canvas. Same widths as before, no zoom/transform.
-  function getDayPageStyles(totalWidth) {
-    return `<style>
-* { box-sizing: border-box; }
-body, html { margin: 0; padding: 0; background: #fff; font-family: -apple-system, "Microsoft YaHei", BlinkMacSystemFont, "Segoe UI", sans-serif; color: #333; }
-h1 { font-size: 22px; margin: 14px 0 4px; text-align: center; }
-.subtitle { color: #666; font-size: 13px; margin: 0 0 14px; text-align: center; }
-.day-page-header { font-size: 15px; font-weight: bold; margin: 0 auto 10px auto; padding: 5px 12px; background: #e3f2fd; border-radius: 4px; display: table; }
-.day-page-date { color: #1565c0; }
-.pdf-holder { width: ${totalWidth}px; margin: 0 auto; padding: 8px 10px; }
-table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${totalWidth}px; table-layout: fixed; font-size: 13px; }
-table.pdf-table th, table.pdf-table td {
-  border: 1px solid #333;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  word-break: normal; overflow-wrap: normal;
-}
-.note-cell { white-space: normal !important; word-break: break-word !important; }
-.day-root { width: ${totalWidth + 40}px; margin: 0 auto; background: #fff; padding: 10px 10px 18px; }
-</style>`;
+  function _getPDFTableMeta() {
+    const parents = Array.isArray(settings.parents)
+      ? settings.parents.filter(p => p && p.name && p.name.trim())
+      : [];
+    const hasParents = parents.length > 0;
+    function effPid(c) {
+      if (c.parentId && parents.some(p => p.id === c.parentId)) return c.parentId;
+      return hasParents ? parents[0].id : null;
+    }
+    const groups = [];
+    if (hasParents) {
+      parents.forEach(p => {
+        const cats = categories.filter(c => effPid(c) === p.id);
+        if (cats.length > 0) groups.push({ parent: p, cats });
+      });
+    } else {
+      groups.push({ parent: null, cats: categories.slice() });
+    }
+    const orderedCats = [];
+    groups.forEach(g => g.cats.forEach(c => orderedCats.push(c)));
+
+    // Flatten columns
+    const cw = (settings && settings.columnWidths) || {};
+    const defW = (settings && settings.defaultColWidth) || 50;
+    const rawWidths = [cw.hour || 80];
+    const colHeaders = ['时间'];
+    orderedCats.forEach(cat => {
+      const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
+      subs.forEach(sub => {
+        rawWidths.push(cw[cat.id + '_' + sub.id] || defW);
+        colHeaders.push(sub.name || cat.name);
+      });
+    });
+    rawWidths.push(cw.note || 130);
+    colHeaders.push('Note');
+    rawWidths.push(cw.time || 85);
+    colHeaders.push('填入');
+
+    // Scale to fit target width
+    const target = 1100;
+    const rawTotal = rawWidths.reduce((a, b) => a + b, 0);
+    let fitScale = rawTotal > target ? target / rawTotal : (rawTotal < target * 0.6 ? Math.min(target / rawTotal, 1.3) : 1);
+    const colWidths = rawWidths.map(w => Math.round(w * fitScale));
+    const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+
+    return { parents, hasParents, groups, orderedCats, colWidths, colHeaders, totalWidth, effPid };
   }
 
-  // Builds the full HTML for a day page (including <head>), then renders it
-  // in an offscreen <iframe>, extracts its root, and returns a canvas.
-  async function renderDayPageToCanvas(date, data, pdfTitle, headerInfo) {
-    const { thead, colgroup, totalWidth, orderedCats, hasParents, effPid, noWrapBase } = buildPDFTableHeader(1020);
+  function _getLatestTimeString(row) {
+    let latest = null;
+    categories.forEach(cat => {
+      const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
+      subs.forEach(sub => {
+        const ed = row.entries[cat.id] ? row.entries[cat.id][sub.id] : null;
+        if (ed && ed.timestamp && (!latest || ed.timestamp > latest)) latest = ed.timestamp;
+      });
+    });
+    if (row.noteTimestamp && (!latest || row.noteTimestamp > latest)) latest = row.noteTimestamp;
+    return latest ? getGMTTimeString(latest) : '';
+  }
+
+  // Draw one day's table onto a canvas and return the canvas.
+  function _drawDayToCanvas(date, data, showTitle, titleText, subtitleText) {
+    const meta = _getPDFTableMeta();
+    const { orderedCats, colWidths, colHeaders, totalWidth, hasParents, groups, effPid } = meta;
+
+    // Layout constants (in canvas pixels, scale=2 for sharpness)
+    const S = 2; // scale factor
+    const padX = 6 * S, padY = 5 * S;
+    const headerH = (hasParents ? 3 : 2) * (24 * S) + 4 * S;
+    const rowH = 28 * S;
+    const hourCount = data.length;
+    const tableH = headerH + hourCount * rowH;
+
+    // Top area for title + subtitle + date header
+    let topH = 0;
+    if (showTitle) topH += 30 * S + 14 * S; // title + subtitle
+    topH += 22 * S + 6 * S; // date header bar
+    const totalCanvasW = totalWidth * S + 20 * S;
+    const totalCanvasH = topH + tableH + 10 * S;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = totalCanvasW;
+    canvas.height = totalCanvasH;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(1, 1);
+
+    // Background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    let y = 6 * S;
+
+    // Title
+    if (showTitle && titleText) {
+      ctx.fillStyle = '#333';
+      ctx.font = `bold ${18 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(titleText, canvas.width / 2, y + 16 * S);
+      y += 24 * S;
+    }
+    // Subtitle
+    if (showTitle && subtitleText) {
+      ctx.fillStyle = '#666';
+      ctx.font = `${11 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(subtitleText, canvas.width / 2, y + 12 * S);
+      y += 16 * S;
+    }
+
+    // Date header bar
     const dateObj = new Date(date + 'T00:00:00Z');
     const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-    const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
+    const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]} (GMT)`;
+    ctx.fillStyle = '#e3f2fd';
+    ctx.fillRect(10 * S, y, totalWidth * S, 20 * S);
+    ctx.fillStyle = '#1565c0';
+    ctx.font = `bold ${12 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.fillText('📅 ' + dateLabel, 16 * S, y + 14 * S);
+    y += 26 * S;
 
-    let rowsHTML = '';
+    // Table start position
+    const tableX = 10 * S;
+
+    // Draw header rows
+    let headerY = y;
+    // Row 1: "时间" (rowspan) + parent names or cat names + "Note" + "填入"
+    const r1H = 24 * S;
+    // "时间" cell
+    ctx.fillStyle = '#e8f0fe';
+    ctx.fillRect(tableX, headerY, colWidths[0] * S, (hasParents ? 3 : 2) * r1H + 4 * S);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1 * S;
+    ctx.strokeRect(tableX, headerY, colWidths[0] * S, (hasParents ? 3 : 2) * r1H + 4 * S);
+    ctx.fillStyle = '#1976d2';
+    ctx.font = `bold ${13 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.fillText('时间', tableX + padX, headerY + ((hasParents ? 3 : 2) * r1H + 4 * S) / 2 + 4 * S);
+
+    let cx = tableX + colWidths[0] * S;
+    let colIdx = 1;
+
+    if (hasParents) {
+      // Row 1: parent headers
+      groups.forEach((g, gi) => {
+        let colCount = 0;
+        g.cats.forEach(c => {
+          const sc = c.subStatuses ? c.subStatuses.length : 0;
+          colCount += sc > 0 ? sc : 1;
+        });
+        let groupW = 0;
+        for (let k = 0; k < colCount; k++) groupW += colWidths[colIdx + k] * S;
+        ctx.fillStyle = g.parent.color || '#e8f0fe';
+        if (gi > 0) { ctx.fillStyle = '#bbdefb'; }
+        ctx.fillRect(cx, headerY, groupW, r1H);
+        ctx.strokeRect(cx, headerY, groupW, r1H);
+        ctx.fillStyle = '#1565c0';
+        ctx.font = `bold ${12 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(g.parent.name, cx + groupW / 2, headerY + r1H / 2 + 4 * S);
+        cx += groupW;
+        colIdx += colCount;
+      });
+    } else {
+      // Row 1: category headers
+      orderedCats.forEach(cat => {
+        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
+        let catW = 0;
+        for (let k = 0; k < subs.length; k++) catW += colWidths[colIdx + k] * S;
+        ctx.fillStyle = cat.color || '#e8f0fe';
+        ctx.fillRect(cx, headerY, catW, r1H);
+        ctx.strokeRect(cx, headerY, catW, r1H);
+        ctx.fillStyle = '#333';
+        ctx.font = `bold ${11 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(cat.name, cx + catW / 2, headerY + r1H / 2 + 4 * S);
+        cx += catW;
+        colIdx += subs.length;
+      });
+    }
+
+    // Note + 填入 headers (rowspan)
+    const noteW = colWidths[colWidths.length - 2] * S;
+    const timeW = colWidths[colWidths.length - 1] * S;
+    ctx.fillStyle = '#e8f0fe';
+    ctx.fillRect(cx, headerY, noteW, (hasParents ? 3 : 2) * r1H + 4 * S);
+    ctx.strokeRect(cx, headerY, noteW, (hasParents ? 3 : 2) * r1H + 4 * S);
+    ctx.fillStyle = '#333';
+    ctx.font = `bold ${11 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Note', cx + noteW / 2, headerY + ((hasParents ? 3 : 2) * r1H + 4 * S) / 2 + 4 * S);
+    cx += noteW;
+    ctx.fillStyle = '#e8f0fe';
+    ctx.fillRect(cx, headerY, timeW, (hasParents ? 3 : 2) * r1H + 4 * S);
+    ctx.strokeRect(cx, headerY, timeW, (hasParents ? 3 : 2) * r1H + 4 * S);
+    ctx.fillText('填入', cx + timeW / 2, headerY + ((hasParents ? 3 : 2) * r1H + 4 * S) / 2 + 4 * S);
+
+    headerY += r1H;
+
+    // Row 2: category headers (only if hasParents)
+    if (hasParents) {
+      cx = tableX + colWidths[0] * S;
+      colIdx = 1;
+      orderedCats.forEach((cat, i) => {
+        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
+        let catW = 0;
+        for (let k = 0; k < subs.length; k++) catW += colWidths[colIdx + k] * S;
+        ctx.fillStyle = cat.color || '#e8f0fe';
+        ctx.fillRect(cx, headerY, catW, r1H);
+        ctx.strokeRect(cx, headerY, catW, r1H);
+        ctx.fillStyle = '#333';
+        ctx.font = `bold ${10 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(cat.name, cx + catW / 2, headerY + r1H / 2 + 3 * S);
+        cx += catW;
+        colIdx += subs.length;
+      });
+      headerY += r1H;
+    }
+
+    // Sub-status header row
+    cx = tableX + colWidths[0] * S;
+    colIdx = 1;
+    orderedCats.forEach(cat => {
+      const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: '' }];
+      subs.forEach(sub => {
+        const w = colWidths[colIdx] * S;
+        ctx.fillStyle = '#f0f4f8';
+        ctx.fillRect(cx, headerY, w, r1H + 4 * S);
+        ctx.strokeRect(cx, headerY, w, r1H + 4 * S);
+        ctx.fillStyle = '#555';
+        ctx.font = `${9 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(sub.name || '●', cx + w / 2, headerY + (r1H + 4 * S) / 2 + 3 * S);
+        cx += w;
+        colIdx++;
+      });
+    });
+    // Note + time sub headers already drawn via rowspan
+
+    let dataY = headerY + r1H + 4 * S;
+
+    // Draw data rows
     data.forEach(row => {
-      let statusCells = '';
-      orderedCats.forEach((cat, ci) => {
+      const rh = rowH;
+      let dx = tableX;
+      // Hour cell
+      const rowBg = parseInt(row.hour) % 2 === 0 ? '#fafbfc' : '#ffffff';
+      ctx.fillStyle = rowBg;
+      ctx.fillRect(dx, dataY, colWidths[0] * S, rh);
+      ctx.strokeRect(dx, dataY, colWidths[0] * S, rh);
+      ctx.fillStyle = '#1976d2';
+      ctx.font = `bold ${11 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(row.hour + ':00', dx + colWidths[0] * S / 2, dataY + rh / 2 + 4 * S);
+      dx += colWidths[0] * S;
+
+      // Status cells
+      colIdx = 1;
+      orderedCats.forEach(cat => {
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
-        const prevCat = ci > 0 ? orderedCats[ci - 1] : null;
-        const isNewGroup = hasParents && ci > 0 && effPid(cat) !== effPid(prevCat);
-        subs.forEach((sub, subi) => {
-          const key = sub.id;
-          const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
+        subs.forEach(sub => {
+          const w = colWidths[colIdx] * S;
+          ctx.fillStyle = rowBg;
+          ctx.fillRect(dx, dataY, w, rh);
+          ctx.strokeRect(dx, dataY, w, rh);
+          const ed = row.entries[cat.id] ? row.entries[cat.id][sub.id] : null;
           const status = ed ? ed.status : '';
-          const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
           const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-          statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
+          ctx.fillStyle = color;
+          ctx.font = `bold ${12 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+          ctx.textAlign = 'center';
+          if (status) ctx.fillText(status, dx + w / 2, dataY + rh / 2 + 4 * S);
+          dx += w;
+          colIdx++;
         });
       });
-      const timeStr = getLatestTimeString(row);
-      const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const rowBg = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
-      rowsHTML += `<tr style="${rowBg}">
-        <td style="border:1px solid #333;padding:6px 8px;font-size:13px;font-weight:bold;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
-        ${statusCells}
-        <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:12px;word-break:break-word;white-space:normal;">${note}</td>
-        <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
-      </tr>`;
+
+      // Note cell
+      const nw = colWidths[colWidths.length - 2] * S;
+      ctx.fillStyle = rowBg;
+      ctx.fillRect(dx, dataY, nw, rh);
+      ctx.strokeRect(dx, dataY, nw, rh);
+      ctx.fillStyle = '#333';
+      ctx.font = `${10 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+      ctx.textAlign = 'left';
+      const noteText = (row.note || '').substring(0, 40);
+      ctx.fillText(noteText, dx + padX, dataY + rh / 2 + 3 * S);
+      dx += nw;
+
+      // Time cell
+      const tw = colWidths[colWidths.length - 1] * S;
+      ctx.fillStyle = rowBg;
+      ctx.fillRect(dx, dataY, tw, rh);
+      ctx.strokeRect(dx, dataY, tw, rh);
+      ctx.fillStyle = '#666';
+      ctx.font = `${10 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+      ctx.textAlign = 'right';
+      const timeStr = _getLatestTimeString(row);
+      ctx.fillText(timeStr, dx + tw - padX, dataY + rh / 2 + 3 * S);
+
+      dataY += rh;
     });
 
-    const styles = getDayPageStyles(totalWidth);
-    const headerHTML = pdfTitle && headerInfo ? `<h1>${pdfTitle}</h1><div class="subtitle">${headerInfo}</div>` : '';
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">${styles}</head><body><div class="day-root">
-${headerHTML}
-<div class="day-page-header"><span class="day-page-date">📅 ${dateLabel} (GMT)</span></div>
-<div class="pdf-holder">
-  <table class="pdf-table">
-    ${colgroup}
-    ${thead}
-    <tbody>${rowsHTML}</tbody>
-  </table>
-</div>
-</div></body></html>`;
-
-    return await renderHTMLStringToCanvas(html);
+    return canvas;
   }
 
-  // Render an HTML document string into a PNG canvas.
-  // We used to render inside a hidden <iframe>, but iOS Safari's iframe
-  // sandbox + canvas size limits caused html2canvas to silently fail /
-  // produce blank output on phones. NEW approach: create a detached div
-  // directly in the main document body (position:fixed, off-screen,
-  // visible, but very large and guaranteed to be in the layout tree so
-  // fonts + CSS are resolved properly). After capture we remove it.
-  async function renderHTMLStringToCanvas(htmlStr) {
-    // Parse the style and body content out of htmlStr. htmlStr format:
-    //   <!DOCTYPE html><html><head>...<style>...</style>...</head><body><div class="day-root">...</div>...</body></html>
-    const styleMatch = htmlStr.match(/<style>([\s\S]*?)<\/style>/i);
-    const innerHTMLMatch = htmlStr.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-    const styleCSS = styleMatch ? styleMatch[1] : '';
-    const bodyHTML = innerHTMLMatch ? innerHTMLMatch[1] : htmlStr;
-
-    const wrap = document.createElement('div');
-    // CSS must be scoped inside wrap so it doesn't leak into the host UI.
-    wrap.setAttribute('data-pdf-render', '1');
-    wrap.style.cssText = `
-position: fixed;
-left: -30000px;
-top: 0;
-z-index: -999999;
-visibility: visible;
-opacity: 1;
-pointer-events: none;
-width: 3600px;
-height: auto;
-background: #fff;
-padding: 0;
-margin: 0;
-overflow: visible;
-transform: none;
-zoom: 1;
-`;
-    // Scoped styles: prepend `[data-pdf-render="1"] ` to every CSS rule
-    // via a <style scoped>-like trick with a shadow-less inline sheet.
-    const scopedStyle = document.createElement('style');
-    const scopedCSS = scopeCSSRules(styleCSS, '[data-pdf-render="1"]');
-    scopedStyle.appendChild(document.createTextNode(scopedCSS));
-    wrap.appendChild(scopedStyle);
-
-    const contentHost = document.createElement('div');
-    contentHost.style.cssText = 'display:block; width:auto; height:auto; position:static; background:#fff;';
-    contentHost.innerHTML = bodyHTML;
-    wrap.appendChild(contentHost);
-
-    document.body.appendChild(wrap);
-    try {
-      // Force style/layout resolution on iOS Safari
-      // eslint-disable-next-line no-unused-expressions
-      wrap.getBoundingClientRect();
-      await new Promise(r => setTimeout(r, 450));
-      const target = wrap.querySelector('.day-root') || contentHost;
-      target.style.background = '#ffffff';
-      // For very wide tables, ensure target is wide enough.
-      const tbl = target.querySelector('table.pdf-table');
-      if (tbl && tbl.style.width) {
-        const w = parseInt(tbl.style.width, 10);
-        if (!isNaN(w)) target.style.width = (w + 60) + 'px';
-      }
-      await new Promise(r => setTimeout(r, 80));
-
-      // On mobile Safari, html2canvas with scale:2 can exceed the
-      // per-canvas memory budget (16MB on older phones), producing an
-      // empty canvas. Use scale:1.5 on touch devices.
-      const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 1);
-      const safeScale = isTouch ? 1.5 : 2;
-
-      const canvas = await html2canvas(target, {
-        backgroundColor: '#ffffff',
-        scale: safeScale,
-        useCORS: true,
-        logging: false,
-        allowTaint: true,
-        ignoreElements: el => false,
-        onclone: (clonedDoc) => {
-          const cl = clonedDoc.querySelector('.day-root') || clonedDoc.body;
-          if (cl) {
-            cl.style.background = '#ffffff';
-            cl.style.display = 'block';
-            cl.style.visibility = 'visible';
-            cl.style.position = 'static';
-          }
-        },
-      });
-
-      // Safety: on iOS we occasionally get a fully transparent canvas
-      // due to memory pressure. If the very first pixel is fully
-      // transparent, try once more at scale 1.
-      if (canvas && canvas.width > 0 && canvas.height > 0) {
-        try {
-          const ctx = canvas.getContext('2d');
-          const p = ctx.getImageData(0, 0, 1, 1).data;
-          const allTransparent = (p[0] === 0 && p[1] === 0 && p[2] === 0 && p[3] === 0);
-          if (allTransparent && safeScale > 1) {
-            const retry = await html2canvas(target, {
-              backgroundColor: '#ffffff',
-              scale: 1,
-              useCORS: true,
-              logging: false,
-              allowTaint: true,
-            });
-            return retry || canvas;
-          }
-        } catch (_) { /* ignore */ }
-      }
-      return canvas;
-    } finally {
-      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+  // Main entry: render each day to canvas, assemble into a single PDF via jsPDF
+  async function exportRangeViaCanvasPDF(dates) {
+    if (!window.jspdf || !jspdf.jsPDF) {
+      throw new Error('PDF 库未加载');
     }
-  }
-
-  // Simple CSS scoper: prepend a root selector to every style block rule.
-  // Handles simple selectors only; sufficient for our narrow needs.
-  function scopeCSSRules(rawCSS, rootSelector) {
-    if (!rawCSS) return '';
-    return rawCSS.replace(/(^|\})\s*([^{]+?)\s*\{/g, function (match, p1, p2) {
-      const selectors = p2.split(',').map(s => s.trim()).filter(Boolean)
-        .map(s => `${rootSelector} ${s.replace(/^html\b|^body\b/gi, '')}`).join(', ');
-      return p1 + ' ' + selectors + ' {';
-    });
-  }
-
-  // Given an array of dates, render each to a canvas, then build one PDF
-  // (A4 landscape, one day per page) with jsPDF.
-  async function exportRangeViaImagePDF(dates) {
     const { jsPDF } = jspdf;
-    // A4 landscape: 297mm x 210mm; content: 281mm x 194mm (8mm margins)
-    const PAGE_W_MM = 297;
-    const PAGE_H_MM = 210;
-    const MARGIN_MM = 8;
+    const PAGE_W_MM = 297, PAGE_H_MM = 210, MARGIN_MM = 8;
     const CONTENT_W_MM = PAGE_W_MM - 2 * MARGIN_MM;
     const CONTENT_H_MM = PAGE_H_MM - 2 * MARGIN_MM;
 
@@ -1401,7 +1499,6 @@ zoom: 1;
     for (let i = 0; i < dates.length; i++) {
       const date = dates[i];
       const data = collectDayData(date);
-      // Stats
       data.forEach(row => {
         categories.forEach(cat => {
           const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [null];
@@ -1414,27 +1511,23 @@ zoom: 1;
         });
       });
 
-      let pdfTitle = null, headerInfo = null;
-      if (i === 0) {
-        pdfTitle = dates.length > 1 ? 'SCC Patrol Record·历史汇总' : 'SCC Patrol Record';
+      const showTitle = (i === 0);
+      let titleText = null, subtitleText = null;
+      if (showTitle) {
+        titleText = dates.length > 1 ? 'SCC Patrol Record·历史汇总' : 'SCC Patrol Record';
         if (dates.length > 1) {
           const rate = total > 0 ? Math.round((filled / total) * 100) : 0;
-          headerInfo = `日期范围: ${dates[0]} 至 ${dates[dates.length - 1]} (GMT) · 共 ${dates.length} 天 · 填写率 ${rate}%`;
+          subtitleText = `日期范围: ${dates[0]} 至 ${dates[dates.length - 1]} (GMT) · 共 ${dates.length} 天 · 填写率 ${rate}%`;
         } else {
-          const dateObj = new Date(date + 'T00:00:00Z');
-          const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-          headerInfo = `日期: ${date} ${weekdays[dateObj.getUTCDay()]} (GMT) · 生成时间: ${getGMTTimeString(getNow())} GMT`;
+          subtitleText = `生成时间: ${getGMTTimeString(getNow())} GMT`;
         }
       }
 
-      const canvas = await renderDayPageToCanvas(date, data, pdfTitle, headerInfo);
+      const canvas = _drawDayToCanvas(date, data, showTitle, titleText, subtitleText);
 
       if (i > 0) pdf.addPage();
 
-      // Compute fit so the entire day image lives within content rect,
-      // preserving aspect ratio and CENTERED on page.
-      const imgWpx = canvas.width, imgHpx = canvas.height;
-      const ratio = imgWpx / imgHpx;
+      const ratio = canvas.width / canvas.height;
       let drawWmm = CONTENT_W_MM;
       let drawHmm = drawWmm / ratio;
       if (drawHmm > CONTENT_H_MM) {
@@ -1449,263 +1542,17 @@ zoom: 1;
     }
 
     const fileDate = (dates.length > 1 ? `${dates[0]}-${dates[dates.length - 1]}` : dates[0]);
-    const filename = `SCC-Patrol-Record_${fileDate}.pdf`;
-    pdf.save(filename);
+    pdf.save(`SCC-Patrol-Record_${fileDate}.pdf`);
     showSnackbar('PDF 已生成下载');
-  }
-
-  // Build PDF table header + <colgroup> with explicit per-column pixel widths.
-  // Columns are PROPORTIONALLY scaled to fit within `maxWidth` (px) so the table
-  // is natively the right size — NO CSS zoom/transform needed. This is the only
-  // approach that works reliably on iOS Safari print-to-PDF.
-  function buildPDFTableHeader(maxWidth) {
-    const parents = Array.isArray(settings.parents)
-      ? settings.parents.filter(p => p && p.name && p.name.trim())
-      : [];
-    const hasParents = parents.length > 0;
-
-    function effPid(c) {
-      if (c.parentId && parents.some(p => p.id === c.parentId)) return c.parentId;
-      return hasParents ? parents[0].id : null;
-    }
-
-    const groups = [];
-    if (hasParents) {
-      parents.forEach(p => {
-        const cats = categories.filter(c => effPid(c) === p.id);
-        if (cats.length > 0) groups.push({ parent: p, cats });
-      });
-    } else {
-      groups.push({ parent: null, cats: categories.slice() });
-    }
-
-    const orderedCats = [];
-    groups.forEach(g => g.cats.forEach(c => orderedCats.push(c)));
-    const headerRows = hasParents ? 3 : 2;
-
-    // Flatten all columns (hour + N sub-status cols + note + time), each with explicit px width
-    const cw = (settings && settings.columnWidths) || {};
-    const defW = (settings && settings.defaultColWidth) || 50;
-    const rawWidths = [];
-    const colKeys = [];
-    rawWidths.push(cw.hour || 75);
-    colKeys.push('hour');
-    orderedCats.forEach(cat => {
-      const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
-      subs.forEach(sub => {
-        const k = cat.id + '_' + sub.id;
-        rawWidths.push(cw[k] || defW);
-        colKeys.push(k);
-      });
-    });
-    rawWidths.push(cw.note || 120);
-    colKeys.push('note');
-    rawWidths.push(cw.time || 80);
-    colKeys.push('time');
-
-    // ---- KEY FIX: scale columns natively to fit page width ----
-    // A4 landscape content area ≈ 281mm ≈ 1063px at 96dpi. Use 1020px as a safe
-    // target (accounts for mobile rendering quirks). If table is much narrower
-    // than the page, enlarge columns up to 1.3x to fill the page.
-    const target = maxWidth || 1020;
-    const rawTotal = rawWidths.reduce((a, b) => a + b, 0);
-    let fitScale = 1;
-    if (rawTotal > target) {
-      fitScale = target / rawTotal;           // shrink to fit
-    } else if (rawTotal < target * 0.65) {
-      fitScale = Math.min(target / rawTotal, 1.3); // enlarge small tables
-    }
-    const colWidths = rawWidths.map(w => Math.round(w * fitScale));
-    const totalWidth = colWidths.reduce((a, b) => a + b, 0);
-
-    let colgroup = '<colgroup>';
-    colWidths.forEach(w => { colgroup += `<col style="width:${w}px">`; });
-    colgroup += '</colgroup>';
-
-    const noWrapBase = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal;overflow-wrap:normal;';
-
-    // Row 1: hour + parent headers (or cat headers if no parents) + note + time
-    let row1 = '<tr>';
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:7px 8px;background:#e8f0fe;color:#1976d2;font-weight:700;text-align:left;font-size:14px;${noWrapBase}">时间</th>`;
-    if (hasParents) {
-      groups.forEach((g, gi) => {
-        let colCount = 0;
-        g.cats.forEach(c => {
-          const sc = c.subStatuses ? c.subStatuses.length : 0;
-          colCount += sc > 0 ? sc : 1;
-        });
-        const div = gi > 0 ? 'border-left:3px solid #1976d2;' : '';
-        const bg = g.parent.color || '#e8f0fe';
-        row1 += `<th colspan="${colCount}" style="border:1px solid #333;padding:7px 5px;background:${bg};font-weight:700;font-size:13px;color:#1565c0;text-align:center;${div}${noWrapBase}">${g.parent.name}</th>`;
-      });
-    } else {
-      orderedCats.forEach((cat) => {
-        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
-        const bg = cat.color || '#e8f0fe';
-        row1 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:7px 5px;background:${bg};font-weight:700;font-size:13px;${noWrapBase}">${cat.name}</th>`;
-      });
-    }
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:7px;background:#e8f0fe;font-weight:700;font-size:13px;${noWrapBase}">Note</th>`;
-    row1 += `<th rowspan="${headerRows}" style="border:1px solid #333;padding:7px;background:#e8f0fe;font-weight:700;font-size:13px;${noWrapBase}">填入</th>`;
-    row1 += '</tr>';
-
-    // Row 2: category headers (only if has parents)
-    let row2 = '';
-    if (hasParents) {
-      row2 = '<tr>';
-      orderedCats.forEach((cat, i) => {
-        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
-        const prevCat = i > 0 ? orderedCats[i - 1] : null;
-        const div = (i > 0 && effPid(cat) !== effPid(prevCat)) ? 'border-left:3px solid #1976d2;' : '';
-        const bg = cat.color || '#e8f0fe';
-        row2 += `<th colspan="${subs.length}" style="border:1px solid #333;padding:5px 4px;background:${bg};font-weight:bold;font-size:12px;${div}${noWrapBase}">${cat.name}</th>`;
-      });
-      row2 += '</tr>';
-    }
-
-    // Bottom row: sub-status headers
-    let subRow = '<tr>';
-    orderedCats.forEach((cat, i) => {
-      const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: '' }];
-      const prevCat = i > 0 ? orderedCats[i - 1] : null;
-      subs.forEach((sub, subi) => {
-        const div = (subi === 0 && i > 0 && hasParents && effPid(cat) !== effPid(prevCat)) ? 'border-left:3px solid #1976d2;' : '';
-        subRow += `<th style="border:1px solid #333;padding:5px 3px;font-size:11px;background:#f0f4f8;color:#555;font-weight:500;${div}${noWrapBase}">${sub.name || '●'}</th>`;
-      });
-    });
-    subRow += '</tr>';
-
-    let thead = '<thead>' + row1;
-    if (hasParents) thead += row2;
-    thead += subRow + '</thead>';
-
-    return { thead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase };
-  }
-
-  // Build print CSS for A4 landscape. NO zoom/transform — the table's column
-  // widths are already natively scaled by buildPDFTableHeader to fit the page.
-  // This is the only approach that works reliably on iOS Safari print-to-PDF.
-  function buildPrintCSSBase(totalWidth) {
-    return {
-      headExtra:
-        '<meta name="viewport" content="width=1200,initial-scale=1">' +
-        '<meta http-equiv="X-UA-Compatible" content="IE=edge">',
-      styleTag: `<style>
-@page { size: 297mm 210mm; margin: 8mm; }
-@page :first { size: 297mm 210mm; margin: 8mm; }
-@page :left  { size: 297mm 210mm; margin: 8mm; }
-@page :right { size: 297mm 210mm; margin: 8mm; }
-* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
-html, body { margin: 0; padding: 0; color: #333; font-family: -apple-system, "Microsoft YaHei", BlinkMacSystemFont, "Segoe UI", sans-serif; }
-html { width: 297mm; }
-body { width: 297mm; padding: 8mm; }
-h1 { font-size: 20px; margin: 0 0 4px 0; text-align: center; }
-.subtitle { color: #666; font-size: 13px; margin: 0 0 12px 0; text-align: center; }
-.pdf-holder { width: ${totalWidth}px; margin: 0 auto; }
-.day-page { width: 100%; margin: 0 auto; padding: 0; }
-.day-page + .day-page { margin-top: 0; }
-.day-page-header { font-size: 15px; font-weight: bold; margin: 0 auto 8px auto; padding: 5px 10px; background: #e3f2fd; border-radius: 4px; display: table; }
-.day-page-date { color: #1565c0; }
-.pdf-wrap { width: ${totalWidth}px; }
-table.pdf-table { border-collapse: separate; border-spacing: 0; width: ${totalWidth}px; table-layout: fixed; font-size: 13px; }
-table.pdf-table th, table.pdf-table td {
-  border: 1px solid #333;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  word-break: normal; overflow-wrap: normal;
-}
-.note-cell { white-space: normal !important; word-break: break-word !important; }
-.footer { margin-top: 14px; font-size: 11px; color: #888; text-align: center; width: 100%; }
-@media print {
-  @page { size: 297mm 210mm; margin: 8mm; }
-  html { width: 297mm !important; }
-  body { width: 297mm !important; padding: 8mm !important; }
-  .day-page { page-break-after: always; break-after: page; }
-  .day-page:last-child { page-break-after: auto; break-after: auto; }
-  .noprint { display: none !important; }
-}
-</style>`,
-    };
   }
 
   function exportRangeAsPDF(startStr, endStr) {
     const dates = getDateRangeApp(startStr, endStr);
-    if (typeof html2canvas === 'function' && window.jspdf && jspdf.jsPDF) {
-      exportRangeViaImagePDF(dates).catch(err => {
-        console.error(err);
-        showSnackbar('导出失败: ' + (err && err.message ? err.message : err));
-      });
-      return;
-    }
-    // Legacy fallback (may truncate on mobile Safari)
-    const title = 'SCC Patrol Record';
-    const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader(1020);
-    const css = buildPrintCSSBase(totalWidth);
-    let dayBlocks = '';
-    let totalStatuses = 0;
-    let filledStatuses = 0;
-    dates.forEach((date, dayIdx) => {
-      const data = collectDayData(date);
-      const dateObj = new Date(date + 'T00:00:00Z');
-      const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-      const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
-      let rowsHTML = '';
-      data.forEach(row => {
-        let statusCells = '';
-        orderedCats.forEach((cat, ci) => {
-          const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
-          const prevCat = ci > 0 ? orderedCats[ci - 1] : null;
-          const isNewGroup = hasParents && ci > 0 && effPid(cat) !== effPid(prevCat);
-          subs.forEach((sub, subi) => {
-            const key = sub.id;
-            const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
-            const status = ed ? ed.status : '';
-            if (status !== STATUS_EMPTY) filledStatuses++;
-            totalStatuses++;
-            const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
-            const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-            statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
-          });
-        });
-        const timeStr = getLatestTimeString(row);
-        const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        const rowBg = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
-        rowsHTML += `<tr style="${rowBg}">
-          <td style="border:1px solid #333;padding:6px 8px;font-size:13px;font-weight:bold;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
-          ${statusCells}
-          <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:12px;word-break:break-word;white-space:normal;">${note}</td>
-          <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
-        </tr>`;
-      });
-      const pageBreak = dayIdx < dates.length - 1 ? 'page-break-after: always;' : '';
-      dayBlocks += `<div class="day-page" style="${pageBreak}">
-        <div class="day-page-header"><span class="day-page-date">📅 ${dateLabel} (GMT)</span></div>
-        <div class="pdf-holder"><div class="pdf-wrap">
-          <table class="pdf-table">
-            ${colgroup}
-            ${pdfThead}
-            <tbody>${rowsHTML}</tbody>
-          </table>
-        </div></div>
-      </div>`;
+    showSnackbar(`正在生成 PDF (${dates.length} 天)...`);
+    exportRangeViaCanvasPDF(dates).catch(err => {
+      console.error(err);
+      showSnackbar('导出失败: ' + (err && err.message ? err.message : err));
     });
-    const html = `<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8">
-<title>SCC Patrol Record - ${startStr} 至 ${endStr}</title>
-${css.headExtra}
-${css.styleTag}
-</head><body>
-<h1>SCC Patrol Record·历史汇总</h1>
-<div class="subtitle">日期范围: ${startStr} 至 ${endStr} (GMT) · 共 ${dates.length} 天 · 填写率 ${totalStatuses > 0 ? Math.round((filledStatuses/totalStatuses)*100) : 0}%</div>
-${dayBlocks}
-<div class="footer">SCC Patrol Record · 共 ${dates.length} 天 · 生成于 ${getGMTTimeString(getNow())} GMT</div>
-<script>window.onload=function(){setTimeout(function(){window.print();},500);}<\/script>
-</body></html>`;
-    const win = window.open('', '_blank');
-    if (!win) { showSnackbar('请允许弹窗以导出'); return; }
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
   }
 
   function getDateRangeApp(startStr, endStr) {
