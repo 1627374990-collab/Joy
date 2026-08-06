@@ -197,7 +197,12 @@
       <label for="time-range">时间容差 (分钟)</label>
       <input type="number" id="time-range" min="0" max="120" value="30" style="max-width:80px;">
     </div>
-    <div class="range-display">填入时间距所在小时范围超过容差时，将以高亮色标注该行的所有填入内容。</div>
+    <div class="range-display">
+      规则：<br>
+      • 未到该小时时间，不可填入（灰显）；<br>
+      • 在"小时起止 ± 容差"范围内：可修改已填内容；<br>
+      • 超过容差窗口：只能填写空白项（不允许改已有记录），且该时段高亮提示。
+    </div>
     <div class="settings-row" style="margin-top:10px;">
       <label for="enable-highlight">启用到期异常标注</label>
       <label class="switch">

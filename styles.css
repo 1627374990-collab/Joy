@@ -61,6 +61,26 @@ input, textarea {
   justify-content: space-between;
   align-items: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* ===== Sticky top control strip (主页面日期 + 按钮 + banner，跟随设置栏一起常显) ===== */
+.sticky-top-controls {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+  /* 预留 app-header 高度的 safe-top，下面会再用 JS 精修 thead 的偏移 */
+  padding: 0;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
 }
 
 .app-header h1 {
@@ -171,8 +191,9 @@ input, textarea {
 
 .status-table thead {
   position: sticky;
-  top: 0;
-  z-index: 5;
+  /* 用 CSS 变量：动态 = app-header + sticky-top-controls 总高度 */
+  top: var(--thead-sticky-top, 0px);
+  z-index: 20;
   background: #f8f9fa;
   /* 固定表头：iOS Safari sticky + 合成层显式提升，避免滚动期间重绘导致丢帧 */
   -webkit-transform: translateZ(0);
@@ -180,6 +201,7 @@ input, textarea {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   will-change: transform;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
 .status-table th,
@@ -232,7 +254,7 @@ input, textarea {
 .status-table th.hour-cell {
   position: sticky;
   left: 0;
-  z-index: 3;
+  z-index: 4;
   background: inherit;
   font-weight: 600;
   color: #1976d2;
@@ -246,6 +268,11 @@ input, textarea {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   will-change: transform;
+}
+
+/* 表头第一列在横滚时也被吸到最左且盖在数据行上 */
+.status-table thead th.hour-cell {
+  z-index: 25;
 }
 
 .status-table tbody tr:nth-child(even) {
@@ -346,6 +373,72 @@ input, textarea {
 .status-cell.out-of-range.status-crossed {
   background: var(--highlight-color, #ffeb3b) !important;
   border-radius: 4px;
+}
+
+/* ===== 时间容差编辑权限视觉 ===== */
+.status-cell.cell-disabled,
+tbody tr.row-future .status-cell {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: saturate(0.6);
+  background: #f3f4f6 !important;
+}
+
+tbody tr.row-future td.hour-cell {
+  color: #90a4ae !important;
+  background: #f3f4f6 !important;
+}
+
+/* grace-fill 整行：高亮底色提示（可填但过了容差） */
+tbody tr.row-grace-fill,
+tbody tr.row-grace-fill td.hour-cell,
+tbody tr.row-grace-fill td.time-cell,
+tbody tr.row-grace-fill td.note-cell {
+  background-color: #fff8e1 !important;
+}
+
+.status-cell.cell-grace {
+  box-shadow: inset 0 0 0 1px rgba(255, 193, 7, 0.7);
+  border-radius: 4px;
+}
+
+.note-input.out-of-range,
+.note-input.cell-grace {
+  background: var(--highlight-color, #fff59d) !important;
+  border-color: #fbc02d !important;
+  box-shadow: 0 0 0 1px rgba(253, 216, 53, 0.5) inset;
+}
+
+.note-input.note-disabled,
+.note-input[disabled] {
+  background: #f3f4f6 !important;
+  color: #90a4ae;
+  cursor: not-allowed;
+  -webkit-text-fill-color: #90a4ae;
+  opacity: 0.75;
+}
+
+/* 容差外已填状态：显示一个"锁"的视觉暗示 */
+tbody tr.row-grace-fill td.status-cell.status-checked,
+tbody tr.row-grace-fill td.status-cell.status-crossed {
+  position: relative;
+}
+
+tbody tr.row-grace-fill td.status-cell.status-checked::after,
+tbody tr.row-grace-fill td.status-cell.status-crossed::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(211, 47, 47, 0.65);
+}
+
+/* 历史页 sticky 表头对齐主页面（也加 --thead-sticky-top） */
+.history-view .status-table thead {
+  z-index: 15;
 }
 
 .status-cell.out-of-range.status-checked,

@@ -177,6 +177,35 @@
     return ts < recordHourStart - tolerance || ts > recordHourEnd + tolerance;
   }
 
+  // ===== Editability windows based on time tolerance =====
+  // Returns one of: 'future' (hour not yet reached), 'editable' (within tolerance),
+  //                 'grace-fill' (past tolerance but still allow filling blanks with highlight),
+  //                 'locked' (cannot modify at all)
+  //
+  // Rules per user request:
+  //   - 没到时间的那栏：不可填入 (future → blocked)
+  //   - 容差范围内：可修改 (editable → normal)
+  //   - 过了时间容差：可填入但须高亮 (grace-fill → highlighted, and edit=overwrite existing is LOCKED)
+  function getHourAccessState(dateStr, hourStr, refNowMs) {
+    const now = refNowMs || getNow().getTime();
+    const toleranceMs = settings.timeRangeMinutes * 60 * 1000;
+    const y = parseInt(dateStr.slice(0, 4));
+    const mo = parseInt(dateStr.slice(5, 7)) - 1;
+    const d = parseInt(dateStr.slice(8, 10));
+    const h = parseInt(hourStr, 10);
+    const hourStart = new Date(Date.UTC(y, mo, d, h, 0, 0, 0)).getTime();
+    const hourEnd = hourStart + 3600 * 1000;
+    // Editable window = [hourStart - tolerance, hourEnd + tolerance]
+    const editWinStart = hourStart - toleranceMs;
+    const editWinEnd = hourEnd + toleranceMs;
+
+    if (now < hourStart) return 'future';       // 没到时间：不可填入
+    if (now <= editWinEnd) return 'editable';  // 容差内：可修改
+    // 超出容差窗口：按照你说的"过了时间容差的可填入，但须高亮显示"
+    // "可填入"在这里的解释：之前是空的可以填；已有的不能再修改 (避免随意篡改历史)
+    return 'grace-fill';
+  }
+
   function isInQuietHours(hour) {
     const start = settings.reminderQuietStart;
     const end = settings.reminderQuietEnd;
@@ -688,7 +717,6 @@
     });
     allConcreteColKeys.push('note');
     allConcreteColKeys.push('time');
-    allConcreteColKeys.push('del');
 
     // ===== Build colgroup as the SINGLE source of truth for column widths =====
     const table = document.getElementById('status-table') || document.querySelector('.status-table');
@@ -764,13 +792,6 @@
     applyColumnWidth(thTime, 'time');
     headerTr.appendChild(thTime);
     resizerTargets.push({ th: thTime, key: 'time' });
-
-    const thDel = document.createElement('th');
-    thDel.className = 'del-cell';
-    thDel.rowSpan = headerRows;
-    applyColumnWidth(thDel, 'del');
-    headerTr.appendChild(thDel);
-    resizerTargets.push({ th: thDel, key: 'del' });
 
     head.appendChild(headerTr);
 
@@ -878,6 +899,11 @@
         tr.className = 'current-hour';
       }
 
+      const access = getHourAccessState(currentDate, hourStr, now.getTime());
+      tr.dataset.hourAccess = access;
+      if (access === 'future') tr.classList.add('row-future');
+      if (access === 'grace-fill') tr.classList.add('row-grace-fill');
+
       const tdHour = document.createElement('td');
       tdHour.className = 'hour-cell';
       tdHour.textContent = `${hourStr}:00`;
@@ -893,6 +919,8 @@
           td.dataset.hour = hourStr;
           td.dataset.categoryId = cat.id;
           td.dataset.subId = sub ? sub.id : '_main';
+          if (access === 'future') td.classList.add('cell-disabled');
+          if (access === 'grace-fill') td.classList.add('cell-grace');
 
           const colKey = getColumnKey('category', cat.id, sub ? sub.id : null);
           applyColumnWidth(td, colKey);
@@ -905,7 +933,7 @@
             td.classList.add('parent-divider');
           }
 
-          renderStatusCell(td, currentDate, hourStr, cat.id, sub ? sub.id : null);
+          renderStatusCell(td, currentDate, hourStr, cat.id, sub ? sub.id : null, access);
           td.addEventListener('click', () => handleCellClick(td, currentDate, hourStr, cat.id, sub ? sub.id : null));
           tr.appendChild(td);
         });
@@ -914,7 +942,7 @@
       const tdNote = document.createElement('td');
       tdNote.className = 'note-cell';
       applyColumnWidth(tdNote, 'note');
-      renderNoteCell(tdNote, currentDate, hourStr);
+      renderNoteCell(tdNote, currentDate, hourStr, access);
       tr.appendChild(tdNote);
 
       const tdTime = document.createElement('td');
@@ -922,17 +950,6 @@
       applyColumnWidth(tdTime, 'time');
       renderTimeCell(tdTime, currentDate, hourStr);
       tr.appendChild(tdTime);
-
-      const tdDel = document.createElement('td');
-      tdDel.className = 'del-cell';
-      applyColumnWidth(tdDel, 'del');
-      const delBtn = document.createElement('button');
-      delBtn.className = 'del-hour-btn';
-      delBtn.textContent = '🗑';
-      delBtn.title = '删除 ' + hourStr + ':00 的记录';
-      delBtn.addEventListener('click', () => deleteHour(currentDate, hourStr));
-      tdDel.appendChild(delBtn);
-      tr.appendChild(tdDel);
 
       body.appendChild(tr);
     }
@@ -955,11 +972,14 @@
     });
   }
 
-  function renderStatusCell(td, date, hour, categoryId, subId) {
+  function renderStatusCell(td, date, hour, categoryId, subId, accessHint) {
     const entry = getEntry(date, hour, categoryId, subId);
-    const outOfRange = settings.outOfRangeHighlight && entry.timestamp
+    const access = accessHint || getHourAccessState(date, hour);
+    const oorByTs = settings.outOfRangeHighlight && entry.timestamp
       ? isOutOfRange(date, hour, entry.timestamp)
       : false;
+    // grace-fill 整行无论如何都高亮（即使是在容差内填的，也因为"当前过了容差"按你要求视觉高亮）
+    const outOfRange = oorByTs || access === 'grace-fill';
 
     td.classList.remove('status-checked', 'status-crossed', 'out-of-range');
 
@@ -973,33 +993,44 @@
       td.textContent = '';
     }
 
-    if (outOfRange && (entry.status !== STATUS_EMPTY)) {
+    if (outOfRange && (entry.status !== STATUS_EMPTY || access === 'grace-fill')) {
       td.classList.add('out-of-range');
-      td.title = '超时填入 (GMT): ' + getTimestampString(entry.timestamp);
+      if (entry.timestamp) {
+        td.title = (oorByTs ? '超时填入' : '容差外填入') + ' (GMT): ' + getTimestampString(entry.timestamp);
+      } else {
+        td.title = '容差外时段（允许填入空白，已填内容不可再改）';
+      }
     } else if (entry.timestamp) {
       td.title = '填入时间 (GMT): ' + getTimestampString(entry.timestamp);
+    } else if (access === 'future') {
+      td.title = '时段未到，暂时不可填入';
     }
   }
 
-  function renderNoteCell(tdNote, date, hour) {
+  function renderNoteCell(tdNote, date, hour, accessHint) {
     const meta = getHourMeta(date, hour);
+    const access = accessHint || getHourAccessState(date, hour);
     tdNote.innerHTML = '';
     const textarea = document.createElement('textarea');
     textarea.className = 'note-input';
-    textarea.placeholder = 'Note...';
+    textarea.placeholder = access === 'future' ? '未到时间' : 'Note...';
     textarea.value = meta.note || '';
     textarea.dataset.hour = hour;
-    // note 文本输入：去抖 180ms 再写盘（中文输入法联想/拼音连续击键都合并为一次写入）
+    if (access === 'future') {
+      textarea.disabled = true;
+      textarea.classList.add('note-disabled');
+    }
+    if (access === 'grace-fill') {
+      textarea.classList.add('cell-grace');
+    }
     textarea.addEventListener('input', _debounce((e) => {
       const h = e.target.dataset.hour;
       saveNote(date, h, e.target.value);
       updateNoteHighlight(tdNote, date, h);
     }, 180));
-    // blur 时立即写盘一次（去抖挂起的内容 + 用户要点别的地方离开输入框）
     textarea.addEventListener('blur', (e) => {
       const h = e.target.dataset.hour;
       if (!h) return;
-      // 先直接写入内存，避免去抖超时期间关闭页面导致丢字
       const m = getHourMeta(date, h);
       if (m.note !== e.target.value) {
         m.note = e.target.value;
@@ -1010,20 +1041,21 @@
     }, { passive: true });
     tdNote.appendChild(textarea);
 
-    updateNoteHighlight(tdNote, date, hour);
+    updateNoteHighlight(tdNote, date, hour, access);
   }
 
-  function updateNoteHighlight(tdNote, date, hour) {
+  function updateNoteHighlight(tdNote, date, hour, accessHint) {
     const meta = getHourMeta(date, hour);
     const ta = tdNote.querySelector('.note-input');
     if (!ta) return;
+    const access = accessHint || getHourAccessState(date, hour);
+    let highlight = false;
     if (settings.outOfRangeHighlight && meta.noteTimestamp) {
-      const isOOR = isOutOfRange(date, hour, meta.noteTimestamp);
-      if (isOOR) ta.classList.add('out-of-range');
-      else ta.classList.remove('out-of-range');
-    } else {
-      ta.classList.remove('out-of-range');
+      highlight = highlight || isOutOfRange(date, hour, meta.noteTimestamp);
     }
+    if (access === 'grace-fill') highlight = true;
+    if (highlight) ta.classList.add('out-of-range');
+    else ta.classList.remove('out-of-range');
   }
 
   function renderTimeCell(tdTime, date, hour) {
@@ -1062,28 +1094,105 @@
 
   // ===== Interactions =====
   function handleCellClick(td, date, hour, categoryId, subId) {
+    const access = getHourAccessState(date, hour);
+
+    if (access === 'future') {
+      showSnackbar(`${hour}:00 还未到，不能填入`);
+      return;
+    }
+
     const entry = getEntry(date, hour, categoryId, subId);
+    const hadContent = entry.status !== STATUS_EMPTY;
+
+    if (access === 'grace-fill') {
+      // 过了容差窗口：只允许填入空单元格（不能改写已有的）
+      if (hadContent) {
+        showSnackbar(`${hour}:00 已过容差时间，不可修改已填内容`);
+        return;
+      }
+      // 空的，允许填入；但这条记录会被自动标记为 OOR（超时填入高亮）
+      const newStatus = nextStatus(entry.status);
+      if (newStatus === STATUS_EMPTY) return; // 空→空 没意义
+      entry.status = newStatus;
+      entry.timestamp = getNow().getTime();
+      saveRecords();
+      renderStatusCell(td, date, hour, categoryId, subId);
+      _refreshRowAux(date, hour, td);
+      renderPendingCount();
+      renderReminderBanner();
+      return;
+    }
+
+    // access === 'editable' (容差内)：正常修改
+    // 但如果之前已经填过，切换时提示"覆盖"
+    if (hadContent) {
+      const willCycle = entry.status === STATUS_CROSSED && (nextStatus(entry.status) === STATUS_EMPTY);
+      const willOverwrite = (entry.status === STATUS_CHECKED || entry.status === STATUS_CROSSED)
+        && nextStatus(entry.status) !== STATUS_EMPTY;
+      if (willOverwrite || willCycle) {
+        // 非空→非空 或 非空→清空：给用户确认
+        showDialog('覆盖确认', `${hour}:00 该时段已有打卡记录，确认${willCycle ? '清空' : '修改'}该记录吗？`, () => {
+          entry.status = nextStatus(entry.status);
+          entry.timestamp = entry.status === STATUS_EMPTY ? null : getNow().getTime();
+          saveRecords();
+          renderStatusCell(td, date, hour, categoryId, subId);
+          _refreshRowAux(date, hour, td);
+          renderPendingCount();
+          renderReminderBanner();
+        });
+        return;
+      }
+    }
+
+    // 原来空的：正常填入
     const newStatus = nextStatus(entry.status);
     entry.status = newStatus;
     entry.timestamp = newStatus === STATUS_EMPTY ? null : getNow().getTime();
-
     saveRecords();
     renderStatusCell(td, date, hour, categoryId, subId);
-
-    const timeCell = td.closest('tr').querySelector('.time-cell');
-    if (timeCell) renderTimeCell(timeCell, date, hour);
-
-    const noteCell = td.closest('tr').querySelector('.note-cell');
-    if (noteCell) updateNoteHighlight(noteCell, date, hour);
-
+    _refreshRowAux(date, hour, td);
     renderPendingCount();
     renderReminderBanner();
   }
 
+  function _refreshRowAux(date, hour, tdOrRow) {
+    const tr = (tdOrRow && tdOrRow.closest && tdOrRow.closest('tr')) ? tdOrRow.closest('tr') : null;
+    if (!tr) return;
+    const timeCell = tr.querySelector('.time-cell');
+    if (timeCell) renderTimeCell(timeCell, date, hour);
+    const noteCell = tr.querySelector('.note-cell');
+    if (noteCell) updateNoteHighlight(noteCell, date, hour);
+  }
+
   function saveNote(date, hour, value) {
+    const access = getHourAccessState(date, hour);
     const meta = getHourMeta(date, hour);
-    meta.note = value;
-    meta.noteTimestamp = getNow().getTime();
+    const hadExistingNote = !!(meta && meta.note && meta.note.length > 0);
+
+    if (access === 'future') {
+      // 未来时段：完全不允许写（虽然 input 也会 disabled，双保险）
+      return;
+    }
+    if (access === 'grace-fill') {
+      // 过了容差：之前空备注可以写；之前有备注就不能再修改
+      if (hadExistingNote && value !== meta.note) {
+        // 用户在 textarea 里打了字尝试改——我们回滚到原值并提示
+        const ta = document.querySelector(`.note-input[data-hour="${hour}"]`);
+        if (ta && ta.value !== meta.note) ta.value = meta.note;
+        showSnackbar(`${hour}:00 已过容差时间，不可修改已有备注`);
+        return;
+      }
+      // 第一次填备注（之前空）：允许
+      meta.note = value;
+      meta.noteTimestamp = getNow().getTime();
+      saveRecords();
+      return;
+    }
+    // editable：正常修改；值变化才更新时间戳（保留"最新"时间语义）
+    if (meta.note !== value) {
+      meta.note = value;
+      meta.noteTimestamp = getNow().getTime();
+    }
     saveRecords();
   }
 
@@ -1092,17 +1201,60 @@
     const now = getNow();
     const hourStr = getGMTHourString(now);
     const date = getTodayDate();
+
+    const access = getHourAccessState(date, hourStr, now.getTime());
+    if (access === 'future') {
+      showSnackbar(`${hourStr}:00 还未到，不能填入`);
+      return;
+    }
+
     const preset = getPresetTargets();
     const status = preset.status || STATUS_CHECKED;
     const targets = preset.targets;
     const parentTargets = preset.parentTargets;
-    const count = fillRange(date, hourStr, hourStr, status, targets, parentTargets);
-    if (count > 0) {
-      showSnackbar(`已打卡 ${hourStr}:00 (${count} 项)`);
-    } else {
-      showSnackbar('未填入任何项，请在设置中勾选填入对象');
+
+    // 检测该时段是否已有任何打卡
+    const hourMeta = getHourMeta(date, hourStr);
+    let hasAnyStatus = false;
+    const dr = getDayRecords(date);
+    if (dr[hourStr]) {
+      const rec = dr[hourStr];
+      const keys = Object.keys(rec);
+      for (const k of keys) {
+        if (k === 'meta') continue;
+        const v = rec[k];
+        if (!v) continue;
+        if (typeof v === 'object') {
+          for (const sk of Object.keys(v)) {
+            if (v[sk] && v[sk].status && v[sk].status !== STATUS_EMPTY) { hasAnyStatus = true; break; }
+          }
+        } else if (v.status && v.status !== STATUS_EMPTY) {
+          hasAnyStatus = true;
+        }
+        if (hasAnyStatus) break;
+      }
     }
-    renderAll(true);
+
+    function doFill() {
+      const count = fillRange(date, hourStr, hourStr, status, targets, parentTargets, now.getTime(), access);
+      if (count > 0) {
+        showSnackbar(`已打卡 ${hourStr}:00 (${count} 项)`);
+      } else {
+        showSnackbar('未填入任何项，请在设置中勾选填入对象');
+      }
+      renderAll(true);
+    }
+
+    if (hasAnyStatus) {
+      if (access === 'grace-fill') {
+        // 过了容差：已有的不能改
+        showSnackbar(`${hourStr}:00 已过容差时间，已有记录不可覆盖`);
+        return;
+      }
+      showDialog('覆盖确认', `${hourStr}:00 该时段已打卡，请确认是否覆盖？`, doFill);
+    } else {
+      doFill();
+    }
   }
 
   function getPresetTargets() {
@@ -1117,16 +1269,18 @@
     return parents.length > 0 ? parents[0].id : null;
   }
 
-  function fillRange(date, startHour, endHour, status, targets, parentTargets) {
+  function fillRange(date, startHour, endHour, status, targets, parentTargets, overrideNowMs, accessHint) {
     const start = parseInt(startHour);
     const end = parseInt(endHour);
-    const now = getNow().getTime();
+    const now = overrideNowMs || getNow().getTime();
     const skip = status === 'skip';
     const targetStatus = status === 'skip' ? STATUS_CHECKED : status;
     let filledCount = 0;
 
     for (let h = start; h <= end; h++) {
       const hourStr = String(h).padStart(2, '0');
+      const access = accessHint || getHourAccessState(date, hourStr, now);
+      if (access === 'future') continue; // 未来时段：不可填
       categories.forEach(cat => {
         // Skip entire category if its parent is disabled in preset
         const pid = effParentId(cat);
@@ -1135,13 +1289,16 @@
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [null];
         subs.forEach(sub => {
           const subKey = sub ? sub.id : '_main';
-          // Check if this target is enabled in preset
           if (targets && targets[cat.id] && targets[cat.id][subKey] === false) return;
 
           const entry = getEntry(date, hourStr, cat.id, sub ? sub.id : null);
+          const had = entry.status && entry.status !== STATUS_EMPTY;
+          if (access === 'grace-fill') {
+            if (had) return; // 容差外：不能覆盖已填的
+          }
           if (skip && entry.status !== STATUS_EMPTY) return;
           entry.status = targetStatus;
-          entry.timestamp = now;
+          entry.timestamp = now; // 记录最新记录时间
           filledCount++;
         });
       });
@@ -1708,19 +1865,6 @@ ${css.styleTag}
     setTimeout(() => sb.remove(), 2800);
   }
 
-  // ===== Delete Single Hour =====
-  function deleteHour(date, hour) {
-    showDialog('删除时段', `确定删除 ${date} ${hour}:00 的记录？`, () => {
-      const day = getDayRecords(date);
-      if (day[hour]) {
-        delete day[hour];
-        saveRecords();
-      }
-      renderAll(true);
-      showSnackbar(`${hour}:00 记录已删除`);
-    });
-  }
-
   // ===== Render All =====
   // Apply settings (font-size, highlight color, one-click label, etc.) to the live DOM
   // - Must be idempotent: safe to call at init and any time we re-load from localStorage
@@ -1856,6 +2000,37 @@ ${css.styleTag}
     currentDate = getGMTDateString(getNow());
     applySettingsToDOM();
     renderAll(true);
+    refreshTheadStickyOffset();
+  }
+
+  // Sticky 表头偏移：app-header + sticky-top-controls 总高度 -> --thead-sticky-top
+  function refreshTheadStickyOffset() {
+    try {
+      const header = document.querySelector('.app-header');
+      const controls = document.getElementById('sticky-top-controls');
+      let total = 0;
+      if (header && header.getBoundingClientRect) {
+        total += header.getBoundingClientRect().height;
+      }
+      if (controls && controls.getBoundingClientRect) {
+        total += controls.getBoundingClientRect().height;
+      }
+      document.documentElement.style.setProperty('--thead-sticky-top', total + 'px');
+    } catch (e) {}
+  }
+
+  let _refreshStickyRaf = null;
+  function scheduleRefreshStickyOffset() {
+    if (_refreshStickyRaf) return;
+    const cb = () => {
+      _refreshStickyRaf = null;
+      refreshTheadStickyOffset();
+    };
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      _refreshStickyRaf = window.requestAnimationFrame(cb);
+    } else {
+      setTimeout(cb, 0);
+    }
   }
 
   function init() {
@@ -1869,6 +2044,7 @@ ${css.styleTag}
     document.getElementById('current-date').addEventListener('click', () => {
       currentDate = getTodayDate();
       renderAll(true);
+      scheduleRefreshStickyOffset();
     });
 
     // Buttons
@@ -1883,13 +2059,21 @@ ${css.styleTag}
       window.location.href = 'history.html';
     });
 
-    // Reminder banner close
+    // Reminder banner close —— 切 hidden 可能导致高度变化（banner本身在 sticky-top-controls 里）
     document.getElementById('reminder-close').addEventListener('click', () => {
       document.getElementById('reminder-banner').classList.add('hidden');
+      scheduleRefreshStickyOffset();
     });
+
+    // Initial sticky offset (先于 renderAll 先做一次，之后 render 里再 refine)
+    scheduleRefreshStickyOffset();
 
     // Render（首次加载必须 full 重建表格 DOM）
     renderAll(true);
+    scheduleRefreshStickyOffset();
+
+    // 5 分钟一次兜底刷新（应对 banner 定时显隐 / 字体加载 / 旋转屏）
+    setInterval(scheduleRefreshStickyOffset, 60 * 1000);
 
     // Start clock
     updateClock();
@@ -1911,12 +2095,29 @@ ${css.styleTag}
       setTimeout(() => {
         _pendingReload = false;
         reloadAllAndRender();
+        scheduleRefreshStickyOffset();
       }, 30);
     }
     window.addEventListener('pageshow', scheduleReload, { passive: true });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') scheduleReload();
     }, { passive: true });
+
+    // Resize / orientation change -> sticky 高度重算
+    let _resizeRaf = null;
+    window.addEventListener('resize', () => {
+      if (_resizeRaf) return;
+      _resizeRaf = setTimeout(() => { _resizeRaf = null; scheduleRefreshStickyOffset(); }, 120);
+    }, { passive: true });
+    if (typeof window !== 'undefined' && 'orientationchange' in window) {
+      window.addEventListener('orientationchange', scheduleRefreshStickyOffset, { passive: true });
+    }
+    // 字体加载完成后重算高度
+    try {
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(scheduleRefreshStickyOffset);
+      }
+    } catch (e) {}
   }
 
   // DOM ready

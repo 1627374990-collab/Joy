@@ -38,7 +38,7 @@
 <link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="icons/icon-512.png">
 <link rel="apple-touch-startup-image" media="(orientation: portrait)" href="icons/icon-512.png">
 
-<link rel="stylesheet" href="styles.css?v=170">
+<link rel="stylesheet" href="styles.css?v=173">
 
 <!-- PWA 全局预留样式（iOS 刘海区安全内边距 / 不显示滚动条 / 原生手势） -->
 <style>
@@ -65,28 +65,31 @@
 </header>
 
 <main>
-  <!-- Reminder Banner -->
-  <div id="reminder-banner" class="reminder-banner hidden">
-    <span id="reminder-text">有未填写的时段</span>
-    <button id="reminder-close" class="reminder-close">✕</button>
+  <!-- Sticky top controls: banner + date + actions (常显，像设置栏一样固定) -->
+  <div class="sticky-top-controls" id="sticky-top-controls">
+    <!-- Reminder Banner -->
+    <div id="reminder-banner" class="reminder-banner hidden">
+      <span id="reminder-text">有未填写的时段</span>
+      <button id="reminder-close" class="reminder-close">✕</button>
+    </div>
+
+    <section class="date-selector today-mode">
+      <span id="current-date" class="current-date">今日 (GMT)</span>
+      <span id="date-full" class="date-full"></span>
+    </section>
+
+    <!-- Quick Actions -->
+    <section class="quick-actions">
+      <button id="btn-one-click" class="btn btn-primary btn-one-click">
+        <span class="btn-icon">⚡</span>
+        <span id="one-click-label">一键打卡</span>
+      </button>
+      <button id="btn-export-pdf" class="btn btn-outline btn-export">
+        <span class="btn-icon">📄</span>
+        <span>导出PDF</span>
+      </button>
+    </section>
   </div>
-
-  <section class="date-selector today-mode">
-    <span id="current-date" class="current-date">今日 (GMT)</span>
-    <span id="date-full" class="date-full"></span>
-  </section>
-
-  <!-- Quick Actions -->
-  <section class="quick-actions">
-    <button id="btn-one-click" class="btn btn-primary btn-one-click">
-      <span class="btn-icon">⚡</span>
-      <span id="one-click-label">一键打卡</span>
-    </button>
-    <button id="btn-export-pdf" class="btn btn-outline btn-export">
-      <span class="btn-icon">📄</span>
-      <span>导出PDF</span>
-    </button>
-  </section>
 
   <section class="table-wrapper">
     <table id="status-table" class="status-table">
@@ -96,9 +99,9 @@
   </section>
 
   <div class="legend">
-    <span class="legend-item"><span class="color-dot" id="legend-dot"></span>超时记录</span>
+    <span class="legend-item"><span class="color-dot" id="legend-dot"></span>超时 / 容差外记录</span>
     <span class="legend-item">点击单元格切换: 空→✓→✗→空</span>
-    <span class="legend-item">✓ 操作后自动保存</span>
+    <span class="legend-item">容差内可修改，容差外仅可填空白且不可改，未到时不可填</span>
     <span class="legend-item" id="pending-count">待填写: --</span>
   </div>
 </main>
@@ -117,7 +120,7 @@
 
 <script src="lib/jspdf.umd.min.js"></script>
 
-<script src="app.js?v=172"></script>
+<script src="app.js?v=173"></script>
 
 <!-- PWA: Service Worker 注册 + 快捷键支持（?action=oneclick 一键打卡） -->
 <script>

@@ -78,50 +78,53 @@
 </header>
 
 <main>
-  <section class="history-controls">
-    <div class="date-range">
-      <label>日期范围</label>
-      <div class="date-inputs">
-        <input type="date" id="date-start" class="date-input">
-        <span class="date-sep">至</span>
-        <input type="date" id="date-end" class="date-input">
+  <!-- 历史页 sticky 顶栏（控制区 + summary）与主页面一样常显 -->
+  <div class="sticky-top-controls" id="sticky-top-controls">
+    <section class="history-controls">
+      <div class="date-range">
+        <label>日期范围</label>
+        <div class="date-inputs">
+          <input type="date" id="date-start" class="date-input">
+          <span class="date-sep">至</span>
+          <input type="date" id="date-end" class="date-input">
+        </div>
       </div>
-    </div>
-    <div class="control-actions">
-      <button id="btn-search" class="btn btn-primary">🔍 查询</button>
-      <button id="btn-export-range" class="btn btn-outline">📄 导出PDF</button>
-      <button id="btn-clear-history" class="btn btn-sm btn-danger">🗑 清除全部历史</button>
-    </div>
-  </section>
-
-  <!-- 一键导出习惯 -->
-  <section class="history-controls quick-export-section">
-    <div class="quick-export-row">
-      <label class="quick-export-label">⚡ 一键导出习惯</label>
-      <div class="quick-export-opts">
-        <select id="quick-export-start" class="quick-export-select"></select>
-        <span class="date-sep">至</span>
-        <select id="quick-export-end" class="quick-export-select"></select>
-        <button id="btn-quick-export" class="btn btn-primary">⚡ 导出</button>
+      <div class="control-actions">
+        <button id="btn-search" class="btn btn-primary">🔍 查询</button>
+        <button id="btn-export-range" class="btn btn-outline">📄 导出PDF</button>
+        <button id="btn-clear-history" class="btn btn-sm btn-danger">🗑 清除全部历史</button>
       </div>
-    </div>
-    <div class="range-display" style="margin-top:6px;color:#888;font-size:12px;">选择起始日和结束日（最早可选上上周一），点击导出即可生成该范围的PDF。</div>
-  </section>
+    </section>
 
-  <section class="history-summary" id="history-summary">
-    <div class="summary-item">
-      <span class="summary-label">查询日期</span>
-      <span class="summary-value" id="summary-date">--</span>
-    </div>
-    <div class="summary-item">
-      <span class="summary-label">记录天数</span>
-      <span class="summary-value" id="summary-days">0</span>
-    </div>
-    <div class="summary-item">
-      <span class="summary-label">完成率</span>
-      <span class="summary-value" id="summary-rate">0%</span>
-    </div>
-  </section>
+    <!-- 一键导出习惯 -->
+    <section class="history-controls quick-export-section">
+      <div class="quick-export-row">
+        <label class="quick-export-label">⚡ 一键导出习惯</label>
+        <div class="quick-export-opts">
+          <select id="quick-export-start" class="quick-export-select"></select>
+          <span class="date-sep">至</span>
+          <select id="quick-export-end" class="quick-export-select"></select>
+          <button id="btn-quick-export" class="btn btn-primary">⚡ 导出</button>
+        </div>
+      </div>
+      <div class="range-display" style="margin-top:6px;color:#888;font-size:12px;">选择起始日和结束日（最早可选上上周一），点击导出即可生成该范围的PDF。</div>
+    </section>
+
+    <section class="history-summary" id="history-summary">
+      <div class="summary-item">
+        <span class="summary-label">查询日期</span>
+        <span class="summary-value" id="summary-date">--</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">记录天数</span>
+        <span class="summary-value" id="summary-days">0</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">完成率</span>
+        <span class="summary-value" id="summary-rate">0%</span>
+      </div>
+    </section>
+  </div>
 
   <section class="history-list" id="history-list">
     <div class="empty-state" id="empty-state">

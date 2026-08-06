@@ -1225,12 +1225,32 @@ ${css.styleTag}
     document.getElementById('date-start').value = weekAgo;
     document.getElementById('date-end').value = today;
 
+    // ===== sticky thead 偏移 =====
+    function refreshTheadStickyOffset() {
+      try {
+        const header = document.querySelector('.app-header');
+        const controls = document.getElementById('sticky-top-controls');
+        let total = 0;
+        if (header && header.getBoundingClientRect) total += header.getBoundingClientRect().height;
+        if (controls && controls.getBoundingClientRect) total += controls.getBoundingClientRect().height;
+        document.documentElement.style.setProperty('--thead-sticky-top', total + 'px');
+      } catch (e) {}
+    }
+    function scheduleSticky() {
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        try { window.requestAnimationFrame(refreshTheadStickyOffset); return; } catch (e) {}
+      }
+      setTimeout(refreshTheadStickyOffset, 0);
+    }
+    scheduleSticky();
+
     document.getElementById('btn-search').addEventListener('click', () => {
       const start = document.getElementById('date-start').value;
       const end = document.getElementById('date-end').value;
       if (!start || !end) { showSnackbar('请选择日期范围'); return; }
       if (start > end) { showSnackbar('起始日期不能晚于结束日期'); return; }
       renderHistoryList(start, end);
+      scheduleSticky();
     });
 
     document.getElementById('btn-export-range').addEventListener('click', () => {
@@ -1260,6 +1280,18 @@ ${css.styleTag}
 
     // Auto-load initial range
     renderHistoryList(weekAgo, today);
+    scheduleSticky();
+    try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleSticky); } catch (e) {}
+    setInterval(scheduleSticky, 60 * 1000);
+
+    let _resizeRaf = null;
+    window.addEventListener('resize', () => {
+      if (_resizeRaf) return;
+      _resizeRaf = setTimeout(() => { _resizeRaf = null; scheduleSticky(); }, 120);
+    }, { passive: true });
+    if (typeof window !== 'undefined' && 'orientationchange' in window) {
+      window.addEventListener('orientationchange', scheduleSticky, { passive: true });
+    }
 
     // --------------------------------------------------------
     // When returning from settings via history.back:
@@ -1283,6 +1315,7 @@ ${css.styleTag}
           const start = document.getElementById('date-start').value || weekAgo;
           const end = document.getElementById('date-end').value || today;
           renderHistoryList(start, end);
+          scheduleSticky();
         } catch (e) { /* ignore */ }
       }, 30);
     }
