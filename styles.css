@@ -129,24 +129,24 @@ input, textarea {
   background: #f8f9fa;
 }
 
-/* ====== 左侧第 2 冻结区：第一个平台（Open SCC / ...）+ 其下子项：类比时间列的 sticky left 效果 ======
- * 用法：JS 在渲染表头/表体后把对应的 th/td 加上下面 4 个类之一，并写入各自的 style.left = 累计宽度（紧跟在 hour-cell 右边）。
- * 竖滚吸顶的 top 由 thead tr:nth-child(n) th 提供的 top 继承（position:sticky 支持 top+left 同时声明叠加，互不冲突）。
- * z-index 阶梯：
- *   .hour-cell                  z31  最左上的"总锚点"，覆盖所有其他冻结列
- *   .sticky-platform-header     z28  平台名（categories 行 row1）的 th，吸顶 row2.top
- *   .sticky-sub-header          z29  平台下各子项（subs 行 row2）的 th，吸顶 row2.top，要比平台名更高（横滚后子项在平台名右边，需要先盖住）
- *   .sticky-platform-td / .sticky-sub-td  z6：tbody 对应单元格，sticky left，z-index 高于其他 td(5)，低于 thead(20~31)
+/* ====== 左侧第 2 冻结区：第一个平台 + 其下子项 + 组名（"检查内容"第一组）：类比时间列的 sticky left 效果 ======
+ * 关键修复（功能未实现的 CSS 兜底）：
+ *   之前只写了 thead tr:nth-child(n) th 的 top，但特异性 (0,2,1) < th.class 的特异性 (0,2,0)。
+ *   而 th.sticky-platform-header 再写一次 position: sticky（没写 top）会让属性重置为 top:auto → sticky top 不生效，
+ *   导致竖滚吸顶没了 或 横滚吸左也不稳。解决：这里同时显式声明 top 与 z-index（特异性更高，覆盖上面 tr:nth-child 的规则）。
  */
-.status-table thead th.sticky-platform-header,
-.status-table thead th.sticky-sub-header {
-  position: sticky;
-  background: #f8f9fa;
-}
 .status-table thead th.sticky-platform-header {
+  position: sticky;
+  /* 若 first platform header 位于 row0（混合行/parents行）→ --thead-r0-top；row1 → --thead-r1-top；row2 不可能出现平台名 */
+  top: var(--thead-r0-top, var(--thead-r1-top, var(--thead-sticky-top, 0px)));
+  background: #f8f9fa;
   z-index: 28;
 }
 .status-table thead th.sticky-sub-header {
+  position: sticky;
+  /* 子项 row 永远是 headerRows 最后一行：若 2 行 → --thead-r1-top；若 3 行 → --thead-r2-top */
+  top: var(--thead-r1-top, var(--thead-r2-top, var(--thead-sticky-top, 0px)));
+  background: #f8f9fa;
   z-index: 29;
 }
 
@@ -157,8 +157,7 @@ input, textarea {
   z-index: 6;
 }
 
-/* 移动端横滚时，冻结列 + 冻结时间格的合成层提升：仅 left 冻结列提层，避免重算整个表，
-   但注意不能把 wrapper 整体提层（已去掉 wrapper 的 translateZ，这里只对单元格单独提）*/
+/* 移动端横滚合成层提升（仅 left 冻结列单独提层，避免整表重排；注意 wrapper 已不设 translateZ，防止 containing block 干扰） */
 .status-table thead th.sticky-platform-header,
 .status-table thead th.sticky-sub-header,
 .status-table tbody td.sticky-platform-td,
