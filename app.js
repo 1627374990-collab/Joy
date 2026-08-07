@@ -1012,18 +1012,13 @@
     }
     window._refreshHeaderRowStickyTops = refreshHeaderRowStickyTops;
 
-    // ===== 左冻结列 #2：把第 1 个平台(categories row) + 其下所有子项 与 hour-cell 一样 sticky left 常显 =====
-    // 用户需求：类比向右横滚仍能看到小时列的 sticky left 效果，向右横滚也仍能看到第一个平台 + 其子项。
-    //
-    // 【关键索引规则（修正 4 类错位 bug）】
-    //   mixed row (headerTr) = 同 row 同时存在 hour-cell + 类别列 + note + time
-    //     当 hasParents=false 且 hasSubs=false → headerRows=1 → 唯一 row = mixed
-    //     当 hasParents=false 且 hasSubs=true → headerRows=2 → row0 = mixed (hour+cats+note+time)
-    //     当 hasParents=true → headerRows=3 → row0 = mixed (hour+parents+note+time)，row1/row2 独立 (纯 cats/纯 subs)
-    //   → 若 categories row 是 mixed row：firstCat 的 th 索引 = 1（th[0] 是 hour-cell）
-    //   → 若 categories row 是独立 row (纯 cats)：firstCat th 索引 = 0
-    //   subs row 永远是独立 row (纯 subs) → first sub th 索引 = 0
-    //   tbody 每行永远是 mixed：td[0]=hour → first status col 索引 = 1 → td[1..1+subCount-1] = firstCat 子项
+    // ===== 左冻结列 #2：把第一个平台（orderedCats[0]，例如 Open SCC/DFH-4）+ 其下所有子项 + 对应的"检查组名（TMs…）"一起 sticky-left 常显。
+    // 修复点（解决用户反馈"子项和上面分离 + 冻结错位"）：
+    //   (1) 不再硬编码 firstConcreteIdx=1 / subsThStart=0。按 buildColgroup 的真实列顺序，遍历 orderedCats / groups → 精确计算：
+    //       firstCatConcreteStart：在 allConcreteColKeys 里，firstCat 的第 1 个子列的 index（hour=0，之后需累加 orderedCats 里 firstCat 之前各 cat 的 subCount）
+    //       firstCatInSubsRowStart：在 subs row 里，firstCat 子项集合的 th 起点（遍历 orderedCats，累加到 firstCat 之前所有 cat 的 subCount）
+    //       firstParentIdx/ColSpanInMixedRow：若 parents 行是 mixed，计算 firstCat 所属 group 在 th 列表里的索引（groups 遍历）
+    //   (2) 每个冻结单元格加上 data-row=theRowIdx + data-col=theColIdx，CSS 按 data-row 精确指定吸顶 top（不再用回退），杜绝子项在竖滚时吸顶高度与平台名不一致（导致视觉分离）。
     function applyFreezeFirstPlatform() {
       try {
         const tableEl = document.getElementById('status-table') || document.querySelector('.status-table');
@@ -1038,94 +1033,161 @@
         const headEl = document.getElementById('table-head');
         if (!headEl) return;
         const rows = Array.from(headEl.querySelectorAll('tr'));
-        // ----- 先清除上一次运行遗留的冻结类/left（避免 resize 后叠加错） -----
-        function clearFrozenMarks(selector) {
-          try {
-            Array.from(headEl.querySelectorAll(selector)).forEach(el => {
-              el.classList.remove('sticky-platform-header', 'sticky-sub-header');
-              el.removeAttribute('data-frozen');
-              if (el.style) { el.style.left = ''; }
-            });
-            const bodyEl = document.getElementById('table-body');
-            if (bodyEl) {
-              Array.from(bodyEl.querySelectorAll('td.sticky-platform-td, td.sticky-sub-td')).forEach(el => {
-                el.classList.remove('sticky-platform-td', 'sticky-sub-td');
-                el.removeAttribute('data-frozen');
-                if (el.style) { el.style.left = ''; }
-              });
-            }
-          } catch (e) {}
+
+        // ========= 清除上次冻结残留 =========
+        function clearFrozen(el) {
+          if (!el) return;
+          el.classList.remove('sticky-platform-header', 'sticky-sub-header', 'frozen-last-col');
+          el.removeAttribute('data-frozen');
+          el.removeAttribute('data-row');
+          el.removeAttribute('data-col');
+          el.removeAttribute('data-left');
+          if (el.style) { el.style.left = ''; }
         }
-        clearFrozenMarks('th.sticky-platform-header, th.sticky-sub-header');
-        // --- 计算累积 left：subLefts[k] = cumulLeft (=hourW) + Σ 前面 firstCat 子列宽 ---
-        const firstConcreteIdx = 1; // 在 status 列中（hour=0），firstCat 的第 1 个子列索引
+        try {
+          Array.from(headEl.querySelectorAll('th.sticky-platform-header, th.sticky-sub-header')).forEach(clearFrozen);
+          const bodyEl = document.getElementById('table-body');
+          if (bodyEl) {
+            Array.from(bodyEl.querySelectorAll('td.sticky-platform-td, td.sticky-sub-td')).forEach(td => {
+              td.classList.remove('sticky-platform-td', 'sticky-sub-td', 'frozen-last-col');
+              td.removeAttribute('data-frozen');
+              td.removeAttribute('data-left');
+              if (td.style) { td.style.left = ''; }
+            });
+          }
+        } catch (e) {}
+
+        // ========= 精确计算起点索引 =========
+        // firstCatConcreteStart：在 allConcreteColKeys（hour + 所有子项列 + note + time）中，firstCat 第 1 个子列的 index
+        let firstCatConcreteStart = 1; // 至少 1（hour=0）
+        for (let i = 0; i < orderedCats.length; i++) {
+          const c = orderedCats[i];
+          if (c.id === firstCat.id) break;
+          const sc = (c.subStatuses && c.subStatuses.length > 0) ? c.subStatuses.length : 1;
+          firstCatConcreteStart += sc;
+        }
+        // firstCatInSubsRowStart：在 subs row（独立 row 纯 subs 不含 hour/note/time）中，firstCat 子项的 th 起点
+        let firstCatInSubsRowStart = 0;
+        for (let i = 0; i < orderedCats.length; i++) {
+          const c = orderedCats[i];
+          if (c.id === firstCat.id) break;
+          const sc = (c.subStatuses && c.subStatuses.length > 0) ? c.subStatuses.length : 1;
+          firstCatInSubsRowStart += sc;
+        }
+        // firstGroupIdxInMixedRow / firstGroupColSpan：在 parents mixed row（row0）中，firstCat 所属 group 的 th 索引 & colSpan
+        let firstGroupIdxInMixedRow = -1;
+        let firstGroupColSpan = 0;
+        if (hasParents && groups.length > 0) {
+          let acc = 1; // th[0]=hour-cell
+          for (let gi = 0; gi < groups.length; gi++) {
+            const g = groups[gi];
+            const isCatInGroup = g.cats.some(c => c.id === firstCat.id);
+            if (isCatInGroup) {
+              firstGroupIdxInMixedRow = gi < 0 ? 1 : acc; // 实际上 gi 到达时 acc 已经 = th 索引（因为前面的 group 每个占 1 th 就加 1）→ 不对：每一个 group 在 parents row 对应一个 th，所以 parent th 的索引 = 1 + gi
+              firstGroupIdxInMixedRow = 1 + gi;
+              firstGroupColSpan = groupColCount(g);
+              break;
+            }
+            acc++; // 每一个 group 占一个 parent th
+          }
+        }
+        // firstCatInCatMixedRowStart：若 categories 行是 mixed row（hasParents=false 时 row0 是混合行：hour[0] + cats[1..n] + note[last-1] + time[last]）
+        //   那么 firstCat 的 th 索引 = 1 + Σ(orderedCats 之前的 cat)每一个 cat = 1 个 th（不管 colSpan 多少，每个 cat 占 1 th）
+        let firstCatInCatMixedRowIdx = -1;
+        if (!hasParents) {
+          let idx = 1; // th[0]=hour
+          for (let i = 0; i < orderedCats.length; i++) {
+            if (orderedCats[i].id === firstCat.id) { firstCatInCatMixedRowIdx = idx; break; }
+            idx++;
+          }
+        } else {
+          // hasParents=true 时 row1 是纯 cats（独立 row，每个 cat 占 1 th），firstCat th 索引 = orderedCats 的 index
+          firstCatInCatMixedRowIdx = 0;
+        }
+
+        // ========= 算 subs 的累积 left 数组（每一个子项 th/td 自己的 left 值）=========
         const cumulLeft = hourW;
         const subLefts = [];
         for (let k = 0; k < subCount; k++) {
           let left = cumulLeft;
-          for (let j = 0; j < k; j++) left += colWidthAt(firstConcreteIdx + j);
+          for (let j = 0; j < k; j++) left += colWidthAt(firstCatConcreteStart + j);
           subLefts.push(left);
         }
-        // --- 计算 categories / parent / subs 三个 row 索引 + 每个 row 内的 firstCat 起点索引 ---
-        let catRowIdx = hasParents ? 1 : 0;
-        let subRowIdx = hasSubs ? (hasParents ? 2 : 1) : -1;
-        let parentRowIdx = hasParents ? 0 : -1;
-        // 关键：当 cat row = mixed row（和 hour/note/time 同行）时 firstCat th 索引=1；否则（纯 cats 独立 row）= 0
-        // catRowIdx 对应 mixed row 的条件：hasParents=false（因为此时 row0 同时放 hour + cats + note/time）
-        let firstCatIdxInCatRow = hasParents ? 0 : 1;
-        // --- 1) categories row 的 firstCat th ---
+
+        // ========= row 索引 =========
+        const catRowIdx = hasParents ? 1 : 0;
+        const subRowIdx = hasSubs ? (hasParents ? 2 : 1) : -1;
+        const parentRowIdx = hasParents ? 0 : -1;
+
+        // ========= 1) parents row：冻结 firstCat 所属的检查组名 th（若有 parents） =========
+        if (parentRowIdx >= 0 && firstGroupIdxInMixedRow >= 0 && groups.length > 0) {
+          const parentRow = rows[parentRowIdx];
+          if (parentRow) {
+            const parentThs = Array.from(parentRow.querySelectorAll('th'));
+            const firstGroupTh = parentThs[firstGroupIdxInMixedRow];
+            if (firstGroupTh) {
+              clearFrozen(firstGroupTh);
+              firstGroupTh.classList.add('sticky-platform-header');
+              firstGroupTh.setAttribute('data-frozen', '1');
+              firstGroupTh.setAttribute('data-row', String(parentRowIdx));
+              firstGroupTh.setAttribute('data-col', String(firstGroupIdxInMixedRow));
+              firstGroupTh.setAttribute('data-left', cumulLeft.toFixed(1));
+              firstGroupTh.style.left = cumulLeft + 'px';
+              // firstGroup 跨多个 cat，宽度 = 跨的所有列宽之和；冻结时按左边对齐即可（平台名 + 子项也在这下面）
+            }
+          }
+        }
+
+        // ========= 2) categories row：冻结 firstCat 平台名 th =========
         const catRow = rows[catRowIdx];
         if (catRow) {
           const catThs = Array.from(catRow.querySelectorAll('th'));
-          const firstCatTh = catThs[firstCatIdxInCatRow];
+          const firstCatTh = catThs[firstCatInCatMixedRowIdx];
           if (firstCatTh) {
+            clearFrozen(firstCatTh);
             firstCatTh.classList.add('sticky-platform-header');
             firstCatTh.setAttribute('data-frozen', '1');
+            firstCatTh.setAttribute('data-row', String(catRowIdx));
+            firstCatTh.setAttribute('data-col', String(firstCatInCatMixedRowIdx));
             firstCatTh.setAttribute('data-left', cumulLeft.toFixed(1));
             firstCatTh.style.left = cumulLeft + 'px';
           }
         }
-        // --- 2) parents row（永远是 mixed row）的 first parent th 索引固定 = 1 ---
-        if (parentRowIdx >= 0 && groups.length > 0) {
-          const parentRow = rows[parentRowIdx];
-          if (parentRow) {
-            const parentThs = Array.from(parentRow.querySelectorAll('th'));
-            const firstParentTh = parentThs[1]; // th[0]=hour-cell
-            if (firstParentTh) {
-              firstParentTh.classList.add('sticky-platform-header');
-              firstParentTh.setAttribute('data-frozen', '1');
-              firstParentTh.setAttribute('data-left', cumulLeft.toFixed(1));
-              firstParentTh.style.left = cumulLeft + 'px';
-            }
-          }
-        }
-        // --- 3) subs row（永远独立纯 subs row → first sub th 索引=0）---
+
+        // ========= 3) subs row：冻结 firstCat 下 subCount 个子 th（如果有 subs） =========
         if (subRowIdx >= 0) {
           const subRow = rows[subRowIdx];
           if (subRow) {
             const subThs = Array.from(subRow.querySelectorAll('th'));
             for (let k = 0; k < subCount; k++) {
-              const subTh = subThs[k];
+              const subTh = subThs[firstCatInSubsRowStart + k];
               if (!subTh) continue;
+              clearFrozen(subTh);
               subTh.classList.add('sticky-sub-header');
               subTh.setAttribute('data-frozen', '1');
+              subTh.setAttribute('data-row', String(subRowIdx));
+              subTh.setAttribute('data-col', String(firstCatInSubsRowStart + k));
               subTh.setAttribute('data-left', subLefts[k].toFixed(1));
               subTh.style.left = subLefts[k] + 'px';
+              // 子项最后一列 → 冻结区最右侧：画一个竖分隔阴影
+              if (k === subCount - 1) subTh.classList.add('frozen-last-col');
             }
           }
         }
-        // --- 4) tbody：每一行对应 firstConcreteIdx .. firstConcreteIdx + subCount - 1（mixed row：td[0]=hour → 1 起）---
+
+        // ========= 4) tbody：每一行 firstCat 的 subCount 个对应 td（索引 = firstCatConcreteStart..firstCatConcreteStart+subCount-1） =========
         const bodyEl = document.getElementById('table-body');
         if (bodyEl) {
           Array.from(bodyEl.querySelectorAll('tr')).forEach(bodyTr => {
             const tds = Array.from(bodyTr.querySelectorAll('td'));
             for (let k = 0; k < subCount; k++) {
-              const td = tds[firstConcreteIdx + k];
+              const td = tds[firstCatConcreteStart + k];
               if (!td) continue;
               td.classList.add(subCount > 1 ? 'sticky-sub-td' : 'sticky-platform-td');
               td.setAttribute('data-frozen', '1');
               td.setAttribute('data-left', subLefts[k].toFixed(1));
               td.style.left = subLefts[k] + 'px';
+              if (k === subCount - 1) td.classList.add('frozen-last-col');
             }
           });
         }

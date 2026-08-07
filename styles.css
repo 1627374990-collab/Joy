@@ -129,25 +129,40 @@ input, textarea {
   background: #f8f9fa;
 }
 
-/* ====== 左侧第 2 冻结区：第一个平台 + 其下子项 + 组名（"检查内容"第一组）：类比时间列的 sticky left 效果 ======
- * 关键修复（功能未实现的 CSS 兜底）：
- *   之前只写了 thead tr:nth-child(n) th 的 top，但特异性 (0,2,1) < th.class 的特异性 (0,2,0)。
- *   而 th.sticky-platform-header 再写一次 position: sticky（没写 top）会让属性重置为 top:auto → sticky top 不生效，
- *   导致竖滚吸顶没了 或 横滚吸左也不稳。解决：这里同时显式声明 top 与 z-index（特异性更高，覆盖上面 tr:nth-child 的规则）。
+/* ====== 左侧第 2 冻结区：第一个平台 + 其下子项 + 检查组名（TMs…）类比时间列 sticky left 效果 ======
+ * 关键：
+ *   - 冻结单元格 top 按自己所在的表头行 (data-row="0/1/2") 精确匹配 --thead-r0/r1/r2-top。
+ *     之前写死 r0 回退 r1：当平台名位于 row1、子项位于 row2 时，它们吸顶 top 会错位 → 子项 top 比 row1 高几像素，视觉"分离"。
+ *   - z-index 阶梯：hour-cell(31) > 同行其他冻结 th → 具体：row0 冻结 z30, row1 冻结 z29, row2 冻结 z28，保证同列多层冻结堆叠时不会互相盖住文字。
+ *   - 每列明确 background=#f8f9fa，不透明，避免合成层提升导致下方内容穿透。
  */
 .status-table thead th.sticky-platform-header {
   position: sticky;
-  /* 若 first platform header 位于 row0（混合行/parents行）→ --thead-r0-top；row1 → --thead-r1-top；row2 不可能出现平台名 */
-  top: var(--thead-r0-top, var(--thead-r1-top, var(--thead-sticky-top, 0px)));
   background: #f8f9fa;
+}
+.status-table thead th.sticky-platform-header[data-row="0"] {
+  top: var(--thead-r0-top, var(--thead-sticky-top, 0px));
+  z-index: 30;
+}
+.status-table thead th.sticky-platform-header[data-row="1"] {
+  top: var(--thead-r1-top, var(--thead-sticky-top, 0px));
+  z-index: 29;
+}
+.status-table thead th.sticky-platform-header[data-row="2"] {
+  top: var(--thead-r2-top, var(--thead-sticky-top, 0px));
   z-index: 28;
 }
 .status-table thead th.sticky-sub-header {
   position: sticky;
-  /* 子项 row 永远是 headerRows 最后一行：若 2 行 → --thead-r1-top；若 3 行 → --thead-r2-top */
-  top: var(--thead-r1-top, var(--thead-r2-top, var(--thead-sticky-top, 0px)));
   background: #f8f9fa;
+}
+.status-table thead th.sticky-sub-header[data-row="1"] {
+  top: var(--thead-r1-top, var(--thead-sticky-top, 0px));
   z-index: 29;
+}
+.status-table thead th.sticky-sub-header[data-row="2"] {
+  top: var(--thead-r2-top, var(--thead-sticky-top, 0px));
+  z-index: 28;
 }
 
 .status-table tbody td.sticky-platform-td,
@@ -157,7 +172,19 @@ input, textarea {
   z-index: 6;
 }
 
-/* 移动端横滚合成层提升（仅 left 冻结列单独提层，避免整表重排；注意 wrapper 已不设 translateZ，防止 containing block 干扰） */
+/* ===== 视觉"连接在一起"：冻结区右侧画一条垂直线分隔阴影，紧贴冻结区最后一列的右侧，避免看起来与 unfreeze 区错位/有缝。
+   同时 hour-cell 右侧画分隔线，冻结区紧贴 hour-cell 右侧 → 无空白缝。 ===== */
+.status-table thead th.hour-cell {
+  border-right: 1px solid #ddd;
+}
+.status-table th.frozen-last-col,
+.status-table td.frozen-last-col {
+  -webkit-box-shadow: 2px 0 3px -2px rgba(0,0,0,0.15);
+  box-shadow: 2px 0 3px -2px rgba(0,0,0,0.15);
+  border-right: 1px solid #cfd8dc;
+}
+
+/* 移动端横滚合成层提升（仅冻结列单独提层，避免整表重排；注意 wrapper 已不设 translateZ，防止 containing block 干扰） */
 .status-table thead th.sticky-platform-header,
 .status-table thead th.sticky-sub-header,
 .status-table tbody td.sticky-platform-td,
