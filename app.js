@@ -2091,20 +2091,23 @@ ${css.styleTag}
     refreshTheadStickyOffset();
   }
 
-  // Sticky 表头偏移：app-header + sticky-top-controls 总高度 -> --thead-sticky-top
+  // Sticky 布局（顶部控件分段吸顶 + wrapper 内部表格吸顶）全变量一次性写入：
+  //   --app-header-height           → sticky-top-controls 的 top 偏移（确保控件栏吸顶时不被 app-header 盖住）
+  //   --page-top-bars-height        → .table-wrapper 的 max-height = 100dvh - top bars 总高
+  //   --thead-sticky-top            → wrapper 内部 sticky th 的吸顶 base 偏移（wrapper 内部滚动 = 永远 0）
+  // 另：调用完毕后自动刷新逐行 th 的 top 堆叠 _refreshHeaderRowStickyTops()
   function refreshTheadStickyOffset() {
     try {
       const header = document.querySelector('.app-header');
       const controls = document.getElementById('sticky-top-controls');
-      let total = 0;
-      if (header && header.getBoundingClientRect) {
-        total += header.getBoundingClientRect().height;
-      }
-      if (controls && controls.getBoundingClientRect) {
-        total += controls.getBoundingClientRect().height;
-      }
-      document.documentElement.style.setProperty('--thead-sticky-top', total + 'px');
-      // 刷新每一行表头的逐行 sticky top 堆叠
+      let headerH = 0;
+      let controlsH = 0;
+      if (header && header.getBoundingClientRect) headerH = header.getBoundingClientRect().height;
+      if (controls && controls.getBoundingClientRect) controlsH = controls.getBoundingClientRect().height;
+      const topBarsH = headerH + controlsH;
+      document.documentElement.style.setProperty('--app-header-height', headerH + 'px');
+      document.documentElement.style.setProperty('--page-top-bars-height', topBarsH + 'px');
+      document.documentElement.style.setProperty('--thead-sticky-top', '0px');
       if (typeof window !== 'undefined' && typeof window._refreshHeaderRowStickyTops === 'function') {
         try { window._refreshHeaderRowStickyTops(); } catch (e) {}
       }
@@ -2117,6 +2120,11 @@ ${css.styleTag}
     const cb = () => {
       _refreshStickyRaf = null;
       refreshTheadStickyOffset();
+      // 第 1 次 layout 完成后按时间阶梯再补 3 次：
+      // - 字体加载/字号变化 可能让 app-header 高度变；
+      // - 顶部控件栏动态展开的 banner（reminder 关闭打开、quick export 显示隐藏）会改变高度；
+      // 这几次重算保证 --app-header-height / --page-top-bars-height 最终收敛到真实值。
+      [50, 250, 1000].forEach(t => setTimeout(refreshTheadStickyOffset, t));
     };
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
       _refreshStickyRaf = window.requestAnimationFrame(cb);

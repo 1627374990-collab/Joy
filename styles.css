@@ -49,7 +49,13 @@ input, textarea {
   display: none !important;
 }
 
-/* ===== Header ===== */
+/* ===== Header =====
+   - 注意：不能让两个 sticky 元素都写 top:0 —— 它们会同时叠在 viewport 顶部同一位置，高层盖低层。
+   - 正确的分段吸顶（从上到下堆叠）：
+       app-header:  top: 0（紧贴 viewport 顶部）
+       sticky-top-controls:  top: var(--app-header-height)（紧贴在 app-header 下方）
+   - --app-header-height 由 JS measure app-header.offsetHeight 后写入 :root
+*/
 .app-header {
   position: sticky;
   top: 0;
@@ -61,25 +67,19 @@ input, textarea {
   justify-content: space-between;
   align-items: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
+  /* 移除 transform: translateZ(0)：合成层提升会强制创建 containing block，导致子元素 sticky 参照异常 */
 }
 
-/* ===== Sticky top control strip (主页面日期 + 按钮 + banner，跟随设置栏一起常显) ===== */
+/* ===== Sticky top control strip (主页面日期 + 按钮 + banner，跟随 app-header 一起常显) ===== */
 .sticky-top-controls {
   position: sticky;
-  top: 0;
-  z-index: 40;
+  top: var(--app-header-height, 64px); /* 吸顶位置 = app-header 底部，不叠在蓝头下面 */
+  z-index: 50; /* z-index 低于 app-header(100)，但高于表格(20-30) */
   background: #fff;
   border-bottom: 1px solid #e0e0e0;
   padding: 0;
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
+  /* 移除 transform: translateZ(0)：同上，会强制创建 containing block 影响 sticky 参照 */
 }
 
 /* ===== 3 行表头 + 第1列小时同时 sticky（类比"横滚时时间列仍可见"的 sticky left 效果，实现"竖滚时表头仍可见"的 sticky top 效果）=====
@@ -215,19 +215,32 @@ input, textarea {
   background: #1565c0;
 }
 
-/* ===== Table ===== */
+/* ===== Table =====
+ * Dashboard 模式：wrapper 自身是唯一滚动容器（横滚 + 竖滚都在这里发生）。
+ * 顶部控件栏（app-header + sticky-top-controls）通过页面级 sticky 贴在 viewport 顶部不动，
+ * wrapper 则占满下方剩余 dvh 空间 → 用户下滑表格时，整个 wrapper 内部滚动，sticky th 吸顶到 wrapper 顶部（控件栏下方），
+ * 完美实现"类比时间栏（列向 sticky left）效果，行向下滑时 3 行表头仍可见"。
+ *
+ * 【为什么要这么做】CSS overflow 规范陷阱：如果只写 overflow-x: auto + overflow-y: visible，
+ * 浏览器会把 visible 自动回退成 auto，使 wrapper 变成双向滚动上下文。此时 thead `position: sticky; top: X`
+ * 的参照是 wrapper 而非 viewport，但 wrapper 高度又没限制导致它本身不竖滚 → sticky 永不触发 →
+ * 就是用户截图上表头完全不跟随滚动的根因。解决：显式给 wrapper 设 max-height + overflow:auto（双向滚动），
+ * 让它真的能滚，sticky 的参照统一且可预测，不依赖 viewport 和 wrapper 两个不同滚动源。
+ */
 .table-wrapper {
-  overflow-x: auto;
-  overflow-y: visible; /* 关键：纵向必须 visible → sticky thead 的 containing block 才是 viewport（否则 transform/容器自身会让 sticky 参照错 → 表头不随滚动走）*/
-  margin: 10px 12px 0;
+  /* 剩余空间 = 视口总 dvh - 顶部控件栏(蓝头+控件)总高 */
+  max-height: calc(100dvh - var(--page-top-bars-height, 240px));
+  height: calc(100dvh - var(--page-top-bars-height, 240px));
+  /* 双向滚动：横滚（长表列溢出）和竖滚（多行时段）都在 wrapper 内部完成 */
+  overflow: auto;
+  margin: 0 12px 10px; /* 顶部不再留间距（因为 wrapper 正好贴在 sticky 控件栏下方）*/
   background: #fff;
   border-radius: 12px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
   -webkit-overflow-scrolling: touch;
-  /* 注意：禁止给 wrapper 设置 transform: translateZ(0) / contain: layout/paint/size；
-     它们会强制创建"新 containing block + 合成层"，导致内部的 sticky thead 不再以 viewport 为参照物 → 滚动时表头看起来完全不动。 */
-  overscroll-behavior-x: contain;
+  overscroll-behavior: contain; /* 防止 wrapper 滚到底部后继续拉动页面背景/浏览器回弹 */
   touch-action: pan-x pan-y;
+  position: relative; /* sticky 元素以滚动容器自身的 padding-box 为参照（明确 relative 防止部分浏览器异常）*/
 }
 
 .status-table {

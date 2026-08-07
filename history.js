@@ -1307,20 +1307,32 @@ ${css.styleTag}
     document.getElementById('date-start').value = weekAgo;
     document.getElementById('date-end').value = today;
 
-    // ===== sticky thead 偏移 =====
+    // ===== sticky 布局：
+    // 历史页沿用 page-level scroll（不是 dashboard wrapper 内滚动）：
+    //   - --app-header-height  → sticky-top-controls.top 必须等于 app-header 高度（避免两个 sticky 控件重叠盖住 banner）
+    //   - --thead-sticky-top   → 页面上如果有多行表头 table，sticky th.top 的 viewport base = top bars 总高（不被顶部控件挡住）
     function refreshTheadStickyOffset() {
       try {
         const header = document.querySelector('.app-header');
         const controls = document.getElementById('sticky-top-controls');
-        let total = 0;
-        if (header && header.getBoundingClientRect) total += header.getBoundingClientRect().height;
-        if (controls && controls.getBoundingClientRect) total += controls.getBoundingClientRect().height;
-        document.documentElement.style.setProperty('--thead-sticky-top', total + 'px');
+        let headerH = 0;
+        let controlsH = 0;
+        if (header && header.getBoundingClientRect) headerH = header.getBoundingClientRect().height;
+        if (controls && controls.getBoundingClientRect) controlsH = controls.getBoundingClientRect().height;
+        document.documentElement.style.setProperty('--app-header-height', headerH + 'px');
+        document.documentElement.style.setProperty('--thead-sticky-top', (headerH + controlsH) + 'px');
       } catch (e) {}
     }
     function scheduleSticky() {
       if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-        try { window.requestAnimationFrame(refreshTheadStickyOffset); return; } catch (e) {}
+        try {
+          window.requestAnimationFrame(() => {
+            refreshTheadStickyOffset();
+            // 字体/控件高度变化兜底（同主页面）
+            [50, 250, 1000].forEach(t => setTimeout(refreshTheadStickyOffset, t));
+          });
+          return;
+        } catch (e) {}
       }
       setTimeout(refreshTheadStickyOffset, 0);
     }
