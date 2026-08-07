@@ -7,6 +7,8 @@
   const STORAGE_KEY_RECORDS = 'status_records_v1';
   const STORAGE_KEY_SETTINGS = 'status_settings_v1';
   const STORAGE_KEY_CATEGORIES = 'status_categories_v1';
+  const STORAGE_KEY_ADMIN_MODE = 'status_admin_mode_v1'; // 管理者模式开关（独立于settings，方便settings.js/history.js也读）
+  const DEFAULT_TIME_RANGE_MINUTES_LOCKED = 15; // 关闭管理者模式时，时间容差固定为此值（用户要求默认15）
 
   const DEFAULT_CATEGORIES = [
     // ===== SCC Patrol Record 默认配置 =====
@@ -56,7 +58,7 @@
 
   const DEFAULT_SETTINGS = {
     highlightColor: '#ffeb3b',
-    timeRangeMinutes: 30,
+    timeRangeMinutes: 15, // 普通用户固定15分钟；管理者可改
     outOfRangeHighlight: true,
     reminderEnabled: true,
     reminderQuietStart: 0,
@@ -172,9 +174,13 @@
     const m = parseInt(date.slice(5, 7)) - 1;
     const d = parseInt(date.slice(8, 10));
     const recordHourStart = new Date(Date.UTC(y, m, d, parseInt(hour), 0, 0, 0)).getTime();
-    const recordHourEnd = recordHourStart + 3600000;
+    // 用户："整点后时间容差内为正常，不在时间容差范围内需高亮"
+    // 例：容差15，8时段内 8:15 后打卡均需高亮。
+    // 解释：记录的填入时间 ts 若不在 [recordHourStart, recordHourStart + tolerance] 就算容差外。
+    //  - ts < recordHourStart：提前填入（按规则"未到时间不可填入"，算容差外 / 异常）
+    //  - ts > recordHourStart + tolerance：超过容差窗口 → 高亮
     const ts = new Date(timestamp).getTime();
-    return ts < recordHourStart - tolerance || ts > recordHourEnd + tolerance;
+    return ts < recordHourStart || ts > recordHourStart + tolerance;
   }
 
   // ===== Editability windows based on time tolerance =====
@@ -185,6 +191,7 @@
   // Rules per user request:
   //   - 没到时间的那栏：不可填入 (future → blocked)
   //   - 容差范围内：可修改 (editable → normal)
+  //     新容差定义：整点起 + N 分钟 为正常（例：容差15, 8时段 → 8:00 - 8:15 正常；8:15 以后算容差外）
   //   - 过了时间容差：可填入但须高亮 (grace-fill → highlighted, and edit=overwrite existing is LOCKED)
   function getHourAccessState(dateStr, hourStr, refNowMs) {
     const now = refNowMs || getNow().getTime();
@@ -194,13 +201,11 @@
     const d = parseInt(dateStr.slice(8, 10));
     const h = parseInt(hourStr, 10);
     const hourStart = new Date(Date.UTC(y, mo, d, h, 0, 0, 0)).getTime();
-    const hourEnd = hourStart + 3600 * 1000;
-    // Editable window = [hourStart - tolerance, hourEnd + tolerance]
-    const editWinStart = hourStart - toleranceMs;
-    const editWinEnd = hourEnd + toleranceMs;
+    // 新正常窗口：整点起 [hourStart, hourStart + tolerance]（容差只给整点之后的N分钟，不再是前后容差）
+    const toleranceWinEnd = hourStart + toleranceMs;
 
     if (now < hourStart) return 'future';       // 没到时间：不可填入
-    if (now <= editWinEnd) return 'editable';  // 容差内：可修改
+    if (now <= toleranceWinEnd) return 'editable';  // 整点后容差内：可修改
     // 超出容差窗口：按照你说的"过了时间容差的可填入，但须高亮显示"
     // "可填入"在这里的解释：之前是空的可以填；已有的不能再修改 (避免随意篡改历史)
     return 'grace-fill';
@@ -970,6 +975,40 @@
     resizerTargets.forEach(item => {
       makeResizable(item.th, item.key);
     });
+
+    // ===== Multi-row header per-row sticky top (每行独立top：与纵向时间列常显一致 =====
+    // 每一行 <thead><tr> 的 top = baseOffset(--thead-sticky-top) + 上述所有表头行的累积高度，
+    // 直接从已在 head 里读取真实 height，避免预估误差导致的第一行数据遮挡 / 表头和行重叠问题。
+    // 等下一帧再算（此时浏览器 layout 已稳定后高度才稳定），并在 scheduleRefreshStickyOffset 里再刷新。
+    function refreshHeaderRowStickyTops() {
+      try {
+        const headEl = document.getElementById('table-head');
+        if (!headEl) return;
+        const rows = Array.from(headEl.querySelectorAll('tr'));
+        const basePx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--thead-sticky-top')) || 0;
+        let acc = 0;
+        rows.forEach((row) => {
+          row.style.top = (basePx + acc) + 'px';
+          row.style.position = 'sticky';
+          // 该行的 th.hour-cell 作为 sticky left 和 sticky top 交叉点，需要合成层提升
+          const hc = row.querySelector('.hour-cell');
+          if (hc) {
+            hc.style.top = (basePx + acc) + 'px';
+            hc.style.zIndex = '31';
+          }
+          acc += row.getBoundingClientRect().height || 0;
+        });
+      } catch (e) {}
+    }
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(refreshHeaderRowStickyTops);
+      // 字体 / Safari 在字体加载后高度可能变，再在 120ms、500ms、1200ms 后各补三次。
+      [120, 500, 1200].forEach(t => setTimeout(refreshHeaderRowStickyTops, t));
+    } else {
+      setTimeout(refreshHeaderRowStickyTops, 0);
+    }
+    // 挂到全局，供 resize/刷新 sticky 偏移时复用
+    window._refreshHeaderRowStickyTops = refreshHeaderRowStickyTops;
   }
 
   function renderStatusCell(td, date, hour, categoryId, subId, accessHint) {
@@ -1872,6 +1911,15 @@ ${css.styleTag}
   //   same-page navigation (location.href='index.html') / visibilitychange / pageshow needs to
   //   re-apply everything, not just swap the `settings` object reference.
   function applySettingsToDOM() {
+    // 管理者模式锁定：非管理者情况下 timeRangeMinutes 必须固定为 DEFAULT_TIME_RANGE_MINUTES_LOCKED
+    // （用户："时间容差固定，默认值为15分钟"）
+    if (!isAdminMode()) {
+      if (settings.timeRangeMinutes !== DEFAULT_TIME_RANGE_MINUTES_LOCKED) {
+        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
+        try { saveSettings(); } catch (e) {}
+      }
+    }
+
     // 1) Font size CSS var --fs
     const fsMap = { 'small': 0.8, 'medium': 1.0, 'large': 1.3, 'xlarge': 1.6 };
     const fs = settings.fontSize || 'medium';
@@ -1909,6 +1957,21 @@ ${css.styleTag}
       oneClickBtn.style.opacity = anyChecked ? '1' : '0.55';
       oneClickBtn.title = anyChecked ? '' : '请在设置中勾选一键打卡的填入项';
     }
+
+    // 4) 应用管理者模式到 DOM（挂到全局，isAdminMode/setAdminMode 会调用）
+    window._applyAdminModeToDOM = function _applyAdminModeToDOM() {
+      const on = isAdminMode();
+      document.documentElement.dataset.adminMode = on ? '1' : '0';
+      // 管理者：给 html 一个样式钩子；主页面显示一个小徽章
+      const banner = document.getElementById('reminder-banner');
+      // 非管理者：确保容差是锁定值
+      if (!on && settings.timeRangeMinutes !== DEFAULT_TIME_RANGE_MINUTES_LOCKED) {
+        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
+        try { saveSettings(); } catch (e) {}
+      }
+      updateClock(); // 刷新时钟显示的🛠徽章
+    };
+    window._applyAdminModeToDOM();
   }
 
   // 渲染：full=true 用于 初始化/pageshow/从设置返回/批量修改后 这种"必须重建DOM"的场景
@@ -1940,11 +2003,55 @@ ${css.styleTag}
     }
   }
 
+  // ===== Admin Mode (管理者模式) =====
+  // 打开方式：连续点击右上角 GMT 时钟 3 下（每次间隔 <= 1.2s）。
+  // 关闭同理（再连击3下）。
+  function isAdminMode() {
+    try {
+      return localStorage.getItem(STORAGE_KEY_ADMIN_MODE) === '1';
+    } catch (e) { return false; }
+  }
+  function setAdminMode(on) {
+    try {
+      if (on) localStorage.setItem(STORAGE_KEY_ADMIN_MODE, '1');
+      else localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
+    } catch (e) {}
+    if (typeof _applyAdminModeToDOM === 'function') _applyAdminModeToDOM();
+    // 非管理者时，锁定 timeRangeMinutes 为固定 15（如果 settings 里不是 15 就强制刷新写入一次保存）
+    if (!on) {
+      if (settings.timeRangeMinutes !== DEFAULT_TIME_RANGE_MINUTES_LOCKED) {
+        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
+        saveSettings();
+      }
+    }
+    showSnackbar(on ? '🛠 管理者模式：已开启（时间容差、时间模拟可改）' : '🔒 管理者模式：已关闭（时间容差固定为15分钟，时间编辑功能已隐藏）');
+  }
+  function bindAdminClockTripleClick() {
+    const el = document.getElementById('gmt-clock');
+    if (!el) return;
+    el.style.cursor = 'pointer';
+    el.title = '连续点击3次可切换管理者模式';
+    let clicks = 0;
+    let timer = null;
+    function reset() { clicks = 0; if (timer) { clearTimeout(timer); timer = null; } }
+    el.addEventListener('click', () => {
+      clicks++;
+      if (timer) clearTimeout(timer);
+      if (clicks >= 3) {
+        // 3连击：切换
+        reset();
+        setAdminMode(!isAdminMode());
+        return;
+      }
+      timer = setTimeout(reset, 1200);
+    });
+  }
+
   // ===== GMT Clock =====
   function updateClock() {
     const now = getNow();
     const el = document.getElementById('gmt-clock');
-    if (el) el.textContent = getGMTTimeString(now) + ' GMT';
+    if (el) el.textContent = getGMTTimeString(now) + ' GMT' + (isAdminMode() ? ' 🛠' : '');
   }
 
   // ===== Reminder System =====
@@ -2016,6 +2123,10 @@ ${css.styleTag}
         total += controls.getBoundingClientRect().height;
       }
       document.documentElement.style.setProperty('--thead-sticky-top', total + 'px');
+      // 刷新每一行表头的逐行 sticky top 堆叠
+      if (typeof window !== 'undefined' && typeof window._refreshHeaderRowStickyTops === 'function') {
+        try { window._refreshHeaderRowStickyTops(); } catch (e) {}
+      }
     } catch (e) {}
   }
 
@@ -2076,6 +2187,7 @@ ${css.styleTag}
     setInterval(scheduleRefreshStickyOffset, 60 * 1000);
 
     // Start clock
+    bindAdminClockTripleClick();
     updateClock();
 
     // Setup reminder system (auto-refreshes every 5s)

@@ -1058,8 +1058,10 @@ ${css.styleTag}
   }
 
   // ===== 一键导出习惯：相对日期选择 =====
-  function buildRelativeDateOptions() {
-    const now = getNow();
+  // 返回数组每项：{ value:'YYYY-MM-DD' 用于当下真实日期选择, label:'本周一 (mm-dd)',
+  //                 relKey:'rel:this_week_monday' 用于存到习惯(同步今天动态计算) }
+  function buildRelativeDateOptions(refNow) {
+    const now = refNow || getNow();
     // 本周一 (GMT)
     const dayOfWeek = now.getUTCDay(); // 0=Sun, 1=Mon, ...
     const mondayThisWeek = new Date(now);
@@ -1071,6 +1073,7 @@ ${css.styleTag}
     earliest.setUTCDate(mondayThisWeek.getUTCDate() - 14);
 
     const weekdayNames = ['一', '二', '三', '四', '五', '六', '日'];
+    const weekdayKeys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     const options = [];
     const todayStr = getGMTDateString(now);
 
@@ -1080,26 +1083,97 @@ ${css.styleTag}
       const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
       const dd = String(d.getUTCDate()).padStart(2, '0');
       const dow = d.getUTCDay(); // 0=Sun
-      const dayName = weekdayNames[(dow + 6) % 7]; // 0=Mon
+      const dowIdx = (dow + 6) % 7; // 0=Mon
+      const dayName = weekdayNames[dowIdx];
 
       // 计算是第几周
       const diffDays = Math.round((d - mondayThisWeek) / (24 * 60 * 60 * 1000));
-      let prefix;
+      let prefix, relWeekPrefix;
       if (dateStr === todayStr) {
         prefix = '今天';
+        relWeekPrefix = 'today';
       } else if (diffDays >= 0) {
         prefix = '本周';
+        relWeekPrefix = 'this_week';
       } else if (diffDays >= -7) {
         prefix = '上周';
+        relWeekPrefix = 'last_week';
       } else {
         prefix = '上上周';
+        relWeekPrefix = 'two_weeks_ago';
       }
 
+      const relKey = prefix === '今天'
+        ? 'rel:today'
+        : `rel:${relWeekPrefix}_${weekdayKeys[dowIdx]}`;
+
       const label = `${prefix}${dayName} (${mm}-${dd})`;
-      options.push({ value: dateStr, label });
+      options.push({ value: dateStr, label, relKey });
       d.setUTCDate(d.getUTCDate() + 1);
     }
     return options;
+  }
+
+  // 根据习惯(rel:xxx 或 旧的绝对日期) 反解为一个"真实 YYYY-MM-DD"，并在当前 options 中找匹配项；找不到 fallback 默认
+  function resolveHabitToOptionValue(habit, options, fallbackValue, refNow) {
+    if (!habit) return fallbackValue;
+
+    // 优先：相对键（rel:xxx），按今天动态计算 -> 找到对应真实日期 option
+    if (typeof habit === 'string' && habit.startsWith('rel:')) {
+      const realDate = resolveRelativeKeyToDate(habit, refNow || getNow());
+      if (realDate) {
+        const ds = getGMTDateString(realDate);
+        if (options.some(o => o.value === ds)) return ds;
+      }
+      // relKey 合法但今天算出的日期超出下拉范围(如上周一还没到本周的下拉)时：fallback 默认值
+      return fallbackValue;
+    }
+    // 兼容老习惯(绝对日期字符串):如果它还在当前下拉范围内(即近20天内), 直接用它, 否则 fallback
+    if (typeof habit === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(habit)) {
+      if (options.some(o => o.value === habit)) return habit;
+    }
+    return fallbackValue;
+  }
+
+  // rel:xxx -> Date (GMT 0:0:0)
+  function resolveRelativeKeyToDate(relKey, refNow) {
+    const now = refNow || getNow();
+    if (!relKey || typeof relKey !== 'string' || !relKey.startsWith('rel:')) return null;
+    const key = relKey.slice(4); // 'rel:'.length
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    if (key === 'today') return today;
+
+    // key like: this_week_monday, last_week_friday, two_weeks_ago_sunday
+    const parts = key.split('_');
+    // parts e.g. ['this','week','monday'] / ['last','week','tuesday'] / ['two','weeks','ago','sunday']
+    let weekOffset = 0;
+    let dowName = null;
+    if (parts[0] === 'this' && parts[1] === 'week') { weekOffset = 0; dowName = parts[2]; }
+    else if (parts[0] === 'last' && parts[1] === 'week') { weekOffset = -1; dowName = parts[2]; }
+    else if (parts[0] === 'two' && parts[1] === 'weeks' && parts[2] === 'ago') { weekOffset = -2; dowName = parts[3]; }
+    if (!dowName) return null;
+    const dowMap = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 0 };
+    const dow = dowMap[dowName];
+    if (dow === undefined) return null;
+
+    const dayOfWeekToday = today.getUTCDay(); // 0=Sun..6=Sat
+    // 本周一: today - ((dayOfWeekToday + 6) % 7)
+    const mondayOffset = -((dayOfWeekToday + 6) % 7);
+    const targetMonday = new Date(today);
+    targetMonday.setUTCDate(today.getUTCDate() + mondayOffset + weekOffset * 7);
+
+    // 目标那一天 = targetMonday + dow-1 (因为 monday=1, offset=0 指周一自己)
+    const extraDays = dow === 0 ? 6 : (dow - 1); // dow 0=Sunday -> 6 extra days
+    const res = new Date(targetMonday);
+    res.setUTCDate(targetMonday.getUTCDate() + extraDays);
+    return res;
+  }
+
+  // 给定一个 option(来自 buildRelativeDateOptions)，如果它对应 rel，就存 rel；否则存绝对日期
+  function habitFromOptionValue(val, options) {
+    const opt = options.find(o => o.value === val);
+    if (opt && opt.relKey) return opt.relKey; // 优先存 rel
+    return val; // 兜底存绝对日期
   }
 
   function initQuickExportHabit() {
@@ -1108,7 +1182,8 @@ ${css.styleTag}
     const btn = document.getElementById('btn-quick-export');
     if (!startSel || !endSel || !btn) return;
 
-    const options = buildRelativeDateOptions();
+    const now = getNow();
+    const options = buildRelativeDateOptions(now);
 
     // 填充选项
     startSel.innerHTML = '';
@@ -1118,11 +1193,10 @@ ${css.styleTag}
       endSel.innerHTML += `<option value="${opt.value}">${opt.label}</option>`;
     });
 
-    // 从 settings 恢复上次选择（习惯）
+    // 从 settings 恢复上次选择（习惯）-> 相对键 rel:xxx 优先（同步今天动态计算）
     const savedStart = settings.quickExportStart;
     const savedEnd = settings.quickExportEnd;
     // 默认：上周二 ~ 本周三（或今天，如果本周三还未到）
-    const now = getNow();
     const dayOfWeek = now.getUTCDay();
     const mondayThisWeek = new Date(now);
     mondayThisWeek.setUTCDate(now.getUTCDate() - ((dayOfWeek + 6) % 7));
@@ -1136,11 +1210,15 @@ ${css.styleTag}
     const defaultStart = getGMTDateString(lastTue);
     const defaultEnd = thisWed <= todayDate ? getGMTDateString(thisWed) : getGMTDateString(now);
 
-    const startVal = (savedStart && options.some(o => o.value === savedStart)) ? savedStart : defaultStart;
-    const endVal = (savedEnd && options.some(o => o.value === savedEnd)) ? savedEnd : defaultEnd;
+    // 解析习惯 -> 当下真实的 option value
+    const startVal = resolveHabitToOptionValue(savedStart, options, defaultStart, now);
+    const endVal = resolveHabitToOptionValue(savedEnd, options, defaultEnd, now);
 
     startSel.value = startVal;
     endSel.value = endVal;
+    // 如果 start/end 超界（今天以后），end 拉到今天
+    if (!options.some(o => o.value === endSel.value)) endSel.value = getGMTDateString(now);
+    if (!options.some(o => o.value === startSel.value)) startSel.value = options[0] ? options[0].value : defaultStart;
 
     // 确保 start <= end
     function validateRange() {
@@ -1152,14 +1230,17 @@ ${css.styleTag}
     startSel.addEventListener('change', validateRange);
     endSel.addEventListener('change', validateRange);
 
-    // 选择改变时立即保存习惯到 localStorage（不需要点导出也能保存）
+    // 选择改变时立即保存习惯到 localStorage（优先存相对键 rel:xxx，不存死日期）
     function saveQuickExportHabit() {
-      settings.quickExportStart = startSel.value;
-      settings.quickExportEnd = endSel.value;
+      settings.quickExportStart = habitFromOptionValue(startSel.value, options);
+      settings.quickExportEnd = habitFromOptionValue(endSel.value, options);
       try {
         localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
       } catch (e) {}
     }
+    // 初始化时就刷新一次 habit（把之前的死日期替换为 rel；老用户自动升级到相对日期）
+    try { saveQuickExportHabit(); } catch (e) {}
+
     startSel.addEventListener('change', saveQuickExportHabit);
     endSel.addEventListener('change', saveQuickExportHabit);
 
@@ -1170,9 +1251,9 @@ ${css.styleTag}
       if (!start || !end) { showSnackbar('请选择日期范围'); return; }
       if (start > end) { showSnackbar('起始日不能晚于结束日'); return; }
 
-      // 保存习惯到 settings
-      settings.quickExportStart = start;
-      settings.quickExportEnd = end;
+      // 保存习惯到 settings（优先 rel，非绝对日期）
+      settings.quickExportStart = habitFromOptionValue(start, options);
+      settings.quickExportEnd = habitFromOptionValue(end, options);
       try {
         localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
       } catch (e) {}
@@ -1209,12 +1290,13 @@ ${css.styleTag}
 
   function init() {
     document.getElementById('btn-back').addEventListener('click', () => {
-      // 返回前保存一键导出习惯
+      // 返回前保存一键导出习惯（优先存相对键 rel:xxx，不存死日期）
       const qs = document.getElementById('quick-export-start');
       const qe = document.getElementById('quick-export-end');
       if (qs && qe) {
-        settings.quickExportStart = qs.value;
-        settings.quickExportEnd = qe.value;
+        const opts = buildRelativeDateOptions(getNow());
+        settings.quickExportStart = habitFromOptionValue(qs.value, opts);
+        settings.quickExportEnd = habitFromOptionValue(qe.value, opts);
         try { localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings)); } catch (e) {}
       }
       _goBackToMain();
@@ -1307,11 +1389,21 @@ ${css.styleTag}
           settings = loadSettings();
           categories = loadCategories();
           records = loadRecords();
-          // refresh quick-export dropdowns from settings
+          // refresh quick-export dropdowns from settings（相对键 rel:xxx -> 今天对应真实日期）
+          const now = getNow();
+          const opts = buildRelativeDateOptions(now);
           const s = document.getElementById('quick-export-start');
           const e = document.getElementById('quick-export-end');
-          if (s && settings.quickExportStart) s.value = settings.quickExportStart;
-          if (e && settings.quickExportEnd) e.value = settings.quickExportEnd;
+          if (s) {
+            const dv = opts[0] ? opts[0].value : getGMTDateString(shiftDate(getGMTDateString(now), -6));
+            s.value = resolveHabitToOptionValue(settings.quickExportStart, opts, dv, now);
+            if (!opts.some(o => o.value === s.value)) s.value = opts[0] ? opts[0].value : dv;
+          }
+          if (e) {
+            const dv = getGMTDateString(now);
+            e.value = resolveHabitToOptionValue(settings.quickExportEnd, opts, dv, now);
+            if (!opts.some(o => o.value === e.value)) e.value = dv;
+          }
           const start = document.getElementById('date-start').value || weekAgo;
           const end = document.getElementById('date-end').value || today;
           renderHistoryList(start, end);

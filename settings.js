@@ -5,13 +5,38 @@
   const STORAGE_KEY_SETTINGS = 'status_settings_v1';
   const STORAGE_KEY_CATEGORIES = 'status_categories_v1';
   const STORAGE_KEY_RECORDS = 'status_records_v1';
+  const STORAGE_KEY_ADMIN_MODE = 'status_admin_mode_v1';   // 管理者模式开关（与主页面共用key，跨页保持同步）
+  const STORAGE_KEY_TIME_OFFSET = 'status_time_offset_ms_v1'; // 与主页面共用key
+  const DEFAULT_TIME_RANGE_MINUTES_LOCKED = 15;
+
+  function isAdminMode() {
+    try { return localStorage.getItem(STORAGE_KEY_ADMIN_MODE) === '1'; } catch (e) { return false; }
+  }
+  function setAdminMode(on) {
+    try {
+      if (on) localStorage.setItem(STORAGE_KEY_ADMIN_MODE, '1');
+      else localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
+    } catch (e) {}
+    applyAdminModeToDOM();
+    if (!on) {
+      // 非管理者：锁定 timeRangeMinutes 为固定15，并禁用时钟编辑
+      if (settings.timeRangeMinutes !== DEFAULT_TIME_RANGE_MINUTES_LOCKED) {
+        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
+        saveSettings();
+      }
+      // 自动切回实时时间模式（锁定时避免模拟时间被继续"留"在模拟态）
+      try { localStorage.removeItem(STORAGE_KEY_TIME_OFFSET); } catch (e) {}
+      _refreshClockDisplay();
+    }
+    showSnackbar(on ? '🛠 管理者模式：已开启' : '🔒 管理者模式：已关闭（时间容差固定15分钟，时间编辑功能隐藏）');
+  }
 
   // ===== Storage Helpers =====
   // ⚠️ DEFAULT_SETTINGS 必须在 loadSettings() 调用之前定义，
   //    否则 const 的暂时性死区（TDZ）会导致 ReferenceError，整个设置页功能瘫痪。
   const DEFAULT_SETTINGS = {
     highlightColor: '#ffeb3b',
-    timeRangeMinutes: 30,
+    timeRangeMinutes: 15,
     outOfRangeHighlight: true,
     reminderEnabled: true,
     reminderQuietStart: 0,
@@ -638,7 +663,7 @@
     }
     if (!settings.oneClickName) settings.oneClickName = '一键打卡';
 
-    // Populate form
+    // Populate form（先填默认值，管理者模式再应用UI锁定——非管理者会覆盖为15并disabled）
     document.getElementById('highlight-color').value = settings.highlightColor;
     document.getElementById('time-range').value = settings.timeRangeMinutes;
     document.getElementById('enable-highlight').checked = settings.outOfRangeHighlight;
@@ -700,7 +725,13 @@
     });
 
     document.getElementById('time-range').addEventListener('input', (e) => {
-      settings.timeRangeMinutes = parseInt(e.target.value) || 30;
+      if (!isAdminMode()) {
+        e.target.value = String(DEFAULT_TIME_RANGE_MINUTES_LOCKED);
+        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
+        persistHighlightSettings();
+        return;
+      }
+      settings.timeRangeMinutes = parseInt(e.target.value) || 15;
       persistHighlightSettings();
     });
 
@@ -886,7 +917,6 @@
   }
 
   // ===== Simulated Time (Shared with app.js via localStorage) =====
-  const STORAGE_KEY_TIME_OFFSET = 'status_time_offset_ms_v1';
 
   function getTimeOffsetMs() {
     const v = localStorage.getItem(STORAGE_KEY_TIME_OFFSET);
@@ -928,6 +958,52 @@
 
   let clockTickTimer = null;
 
+  // ===== Apply admin mode to DOM: 隐藏时间编辑功能、锁定 time-range
+  function applyAdminModeToDOM() {
+    const on = isAdminMode();
+    document.documentElement.dataset.adminMode = on ? '1' : '0';
+
+    // (a) 所有带 data-admin-only="1" 的DOM：非管理者隐藏
+    document.querySelectorAll('[data-admin-only="1"]').forEach(el => {
+      if (!on) el.style.display = 'none';
+      else el.style.display = '';
+    });
+    // 非管理者：强制关闭时间编辑行（避免之前开了编辑但切非管理者后还留着）
+    const editRow = document.getElementById('clock-edit-row');
+    if (!on && editRow) editRow.classList.add('hidden');
+
+    // (b) 时间容差 input：非管理者 disabled + 锁定为 DEFAULT_TIME_RANGE_MINUTES_LOCKED
+    const tr = document.getElementById('time-range');
+    const hint = document.getElementById('time-range-locked-hint');
+    if (tr) {
+      tr.disabled = !on;
+      tr.value = String(on ? (settings.timeRangeMinutes ?? DEFAULT_TIME_RANGE_MINUTES_LOCKED) : DEFAULT_TIME_RANGE_MINUTES_LOCKED);
+    }
+    if (hint) hint.style.display = on ? 'none' : 'inline-block';
+  }
+
+  // 管理者三连击：在设置页"当前时间(GMT)"标题 + 时钟显示 任意一处连击三下都可以切换
+  function bindAdminTripleClick(targetEl) {
+    if (!targetEl) return;
+    targetEl.style.cursor = 'pointer';
+    targetEl.title = '连续点击3次可切换管理者模式';
+    let clicks = 0; let timer = null;
+    function reset() { clicks = 0; if (timer) { clearTimeout(timer); timer = null; } }
+    targetEl.addEventListener('click', () => {
+      clicks++;
+      if (timer) clearTimeout(timer);
+      if (clicks >= 3) { reset(); setAdminMode(!isAdminMode()); return; }
+      timer = setTimeout(reset, 1200);
+    });
+  }
+
+  function _refreshClockDisplay() {
+    const display = document.getElementById('clock-display');
+    if (!display) return;
+    const now = getEffectiveNow();
+    display.textContent = formatGMT(now);
+  }
+
   function initClock() {
     const display = document.getElementById('clock-display');
     const hint = document.getElementById('clock-mode-hint');
@@ -938,6 +1014,14 @@
     const btnApply = document.getElementById('btn-clock-apply');
     const btnCancel = document.getElementById('btn-clock-cancel');
     const btnRefresh = document.getElementById('btn-clock-refresh');
+    const clockTitle = document.getElementById('clock-title');
+
+    // 绑定管理者模式切换：点标题3下，或点时钟显示3下均可切换（主页面点GMT时钟3下）
+    bindAdminTripleClick(clockTitle);
+    bindAdminTripleClick(display);
+
+    // 初始应用管理者模式锁定
+    applyAdminModeToDOM();
 
     function render() {
       const now = getEffectiveNow();
@@ -953,6 +1037,8 @@
         hint.style.color = '#e65100';
       }
     }
+    _refreshClockDisplay = render;
+
 
     function tick() {
       render();
@@ -967,8 +1053,9 @@
       clockTickTimer = setInterval(tick, 1000);
     }
 
-    // Edit button: show edit row pre-filled with current GMT time
+    // Edit button: show edit row pre-filled with current GMT time（管理者模式下才能打开）
     btnEdit.addEventListener('click', () => {
+      if (!isAdminMode()) return;
       const now = getEffectiveNow();
       editDate.value = gmtDateString(now);
       editTime.value = gmtTimeString(now);

@@ -169,11 +169,11 @@
 
   <!-- Live Clock Section -->
   <section class="settings-section">
-    <h2>🕐 当前时间 (GMT)</h2>
+    <h2 id="clock-title">🕐 当前时间 (GMT)</h2>
     <div class="clock-row">
       <div class="clock-display" id="clock-display">--:--:--</div>
-      <button type="button" id="btn-clock-edit" class="btn btn-sm" title="修改时间">✏️ 编辑</button>
-      <button type="button" id="btn-clock-refresh" class="btn btn-sm" title="刷新为实时时间">↻ 刷新</button>
+      <button type="button" id="btn-clock-edit" class="btn btn-sm admin-only" data-admin-only="1" title="修改时间">✏️ 编辑</button>
+      <button type="button" id="btn-clock-refresh" class="btn btn-sm admin-only" data-admin-only="1" title="刷新为实时时间">↻ 刷新</button>
     </div>
     <div class="clock-edit-row hidden" id="clock-edit-row">
       <label>GMT 日期</label>
@@ -194,14 +194,17 @@
       <input type="color" id="highlight-color" value="#ffeb3b">
     </div>
     <div class="settings-row">
-      <label for="time-range">时间容差 (分钟)</label>
-      <input type="number" id="time-range" min="0" max="120" value="30" style="max-width:80px;">
+      <label for="time-range">
+        时间容差 (分钟)
+        <span id="time-range-locked-hint" style="display:none;font-size:12px;color:#666;">（锁定15分钟：连击主页时钟3次解锁管理者模式）</span>
+      </label>
+      <input type="number" id="time-range" min="0" max="120" value="15" style="max-width:80px;">
     </div>
     <div class="range-display">
-      规则：<br>
+      规则（管理者模式可调）：<br>
       • 未到该小时时间，不可填入（灰显）；<br>
-      • 在"小时起止 ± 容差"范围内：可修改已填内容；<br>
-      • 超过容差窗口：只能填写空白项（不允许改已有记录），且该时段高亮提示。
+      • 整点后"容差 N 分钟"为正常窗口（默认 15 分钟）：可填入/可修改已填内容；<br>
+      • 超出该容差窗口：仅可填入空白项（不允许改已有记录），且该时段高亮提示。
     </div>
     <div class="settings-row" style="margin-top:10px;">
       <label for="enable-highlight">启用到期异常标注</label>

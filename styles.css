@@ -74,13 +74,49 @@ input, textarea {
   z-index: 40;
   background: #fff;
   border-bottom: 1px solid #e0e0e0;
-  /* 预留 app-header 高度的 safe-top，下面会再用 JS 精修 thead 的偏移 */
   padding: 0;
   -webkit-transform: translateZ(0);
   transform: translateZ(0);
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
+}
+
+/* ===== 多行表头逐行 sticky 顶部堆叠（与纵向时间 hour-cell 常显模式一致：每行自己算 top 堆叠）===== */
+/* 基础偏移：app-header + sticky-top-controls 总高度 */
+.status-table thead {
+  position: static; /* 取消 thead 级 sticky，改为每行 <tr> 自己 sticky（更稳定，不会因 thead 高度预估导致的行遮挡）*/
+}
+
+.status-table thead tr {
+  position: sticky;
+  /* 每行的实际 top 由 JS 动态写入：top = var(--thead-sticky-top) + Σ 上面已渲染表头行高度
+     这里先给 fallback：所有行同一 base top，第一行是对的，后续行会被 JS 用 style.top 覆盖 */
+  top: var(--thead-sticky-top, 0px);
+  z-index: 20;
+  background: #f8f9fa;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  will-change: transform;
+}
+/* 第 2、3 行表头：z-index 稍高，保证在横滚时覆盖在第一行内容上面（如果有重叠的合成 bug）*/
+.status-table thead tr:nth-child(2) { z-index: 21; }
+.status-table thead tr:nth-child(3) { z-index: 22; }
+
+/* thead 内的 th 显式声明背景色（否则 sticky 行 tr 透明会透过下面表格内容） */
+.status-table thead th { background: inherit; }
+
+/* table-wrapper 加 padding-top 避免 sticky 堆叠后遮挡第一行数据（不再依赖 thead 整体高度预估） */
+.table-wrapper { scroll-margin-top: var(--thead-sticky-top, 0px); }
+.history-list { scroll-margin-top: var(--thead-sticky-top, 0px); }
+
+/* 移动端横滚 + 纵向滚动时，sticky 行与 sticky 列（hour-cell）交叉处不要出现背景撕裂：
+   把 thead 里的 sticky left(= 时间 GMT 那一列表头) 再升高 z-index */
+.status-table thead th.hour-cell {
+  z-index: 30; /* 比普通 thead tr 高，交叉在最左上永远不被其他表头覆盖 */
+  background: #f8f9fa;
 }
 
 .app-header h1 {
@@ -190,10 +226,7 @@ input, textarea {
 }
 
 .status-table thead {
-  position: sticky;
-  /* 用 CSS 变量：动态 = app-header + sticky-top-controls 总高度 */
-  top: var(--thead-sticky-top, 0px);
-  z-index: 20;
+  position: static;
   background: #f8f9fa;
   /* 固定表头：iOS Safari sticky + 合成层显式提升，避免滚动期间重绘导致丢帧 */
   -webkit-transform: translateZ(0);
@@ -201,7 +234,6 @@ input, textarea {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   will-change: transform;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
 .status-table th,
