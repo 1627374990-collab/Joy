@@ -82,3 +82,6 @@ coverage/
 dumps/
 backups/
 export-output/
+
+# ===== Trae 本地预览生成的临时 zip（绝不提交）=====
+.trae-html-share-packages/

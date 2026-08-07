@@ -976,28 +976,33 @@
       makeResizable(item.th, item.key);
     });
 
-    // ===== Multi-row header per-row sticky top (每行独立top：与纵向时间列常显一致 =====
-    // 每一行 <thead><tr> 的 top = baseOffset(--thead-sticky-top) + 上述所有表头行的累积高度，
-    // 直接从已在 head 里读取真实 height，避免预估误差导致的第一行数据遮挡 / 表头和行重叠问题。
-    // 等下一帧再算（此时浏览器 layout 已稳定后高度才稳定），并在 scheduleRefreshStickyOffset 里再刷新。
+    // ===== Multi-row header per-row sticky top (写入 3 个 CSS 变量：供 styles.css 里 nth-child(1/2/3) 使用 =====
+    // 不再对 tr 写 inline style.position / style.top（避免 rowspan 跨行的 行1行2文字 被合成层堆叠覆盖 → 用户反馈"检查内容/平台及设备不见了"）。
+    // 原理：
+    //   row0.top = baseOffset (app-header + sticky-top-controls 总高度)
+    //   row1.top = base + row0.height
+    //   row2.top = base + row0.height + row1.height
+    // 以上结果分别写入 CSS 变量：--thead-r0-top / --thead-r1-top / --thead-r2-top
+    // CSS 侧 .status-table thead tr:nth-child(n) 分别使用这 3 个变量作为 top。
     function refreshHeaderRowStickyTops() {
       try {
         const headEl = document.getElementById('table-head');
         if (!headEl) return;
         const rows = Array.from(headEl.querySelectorAll('tr'));
         const basePx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--thead-sticky-top')) || 0;
-        let acc = 0;
-        rows.forEach((row) => {
-          row.style.top = (basePx + acc) + 'px';
-          row.style.position = 'sticky';
-          // 该行的 th.hour-cell 作为 sticky left 和 sticky top 交叉点，需要合成层提升
-          const hc = row.querySelector('.hour-cell');
-          if (hc) {
-            hc.style.top = (basePx + acc) + 'px';
-            hc.style.zIndex = '31';
-          }
-          acc += row.getBoundingClientRect().height || 0;
-        });
+        const heights = [0, 0, 0];
+        // 先读取 3 行的真实 offsetHeight（此时浏览器已经 layout，值是稳定的，不再预估）
+        for (let i = 0; i < Math.min(rows.length, 3); i++) {
+          heights[i] = rows[i].getBoundingClientRect().height || rows[i].offsetHeight || 0;
+        }
+        const r0 = basePx;
+        const r1 = r0 + heights[0];
+        const r2 = r1 + heights[1];
+        document.documentElement.style.setProperty('--thead-r0-top', r0 + 'px');
+        document.documentElement.style.setProperty('--thead-r1-top', r1 + 'px');
+        document.documentElement.style.setProperty('--thead-r2-top', r2 + 'px');
+        // 交叉点：thead th.hour-cell（跨 3 行 rowspan 的 sticky left 时间格）
+        // 只在 CSS 中 sticky left: 0，并且 top = base（它跟着第1行一起滚，不逐行变）——之前 JS 覆盖 style.top 导致它错位，这里移除
       } catch (e) {}
     }
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
@@ -1017,8 +1022,9 @@
     const oorByTs = settings.outOfRangeHighlight && entry.timestamp
       ? isOutOfRange(date, hour, entry.timestamp)
       : false;
-    // grace-fill 整行无论如何都高亮（即使是在容差内填的，也因为"当前过了容差"按你要求视觉高亮）
-    const outOfRange = oorByTs || access === 'grace-fill';
+    // 用户："过时未填写的不需要高亮，保持表格原形态"→ out-of-range 只看真正的 oorByTs（已填且填入时间超容差）
+    // 不再因 access === 'grace-fill' 就整行/空格高亮
+    const outOfRange = oorByTs;
 
     td.classList.remove('status-checked', 'status-crossed', 'out-of-range');
 
@@ -1032,17 +1038,20 @@
       td.textContent = '';
     }
 
-    if (outOfRange && (entry.status !== STATUS_EMPTY || access === 'grace-fill')) {
+    if (outOfRange && entry.status !== STATUS_EMPTY) {
       td.classList.add('out-of-range');
       if (entry.timestamp) {
-        td.title = (oorByTs ? '超时填入' : '容差外填入') + ' (GMT): ' + getTimestampString(entry.timestamp);
-      } else {
-        td.title = '容差外时段（允许填入空白，已填内容不可再改）';
+        td.title = '超时填入 (GMT): ' + getTimestampString(entry.timestamp);
       }
     } else if (entry.timestamp) {
       td.title = '填入时间 (GMT): ' + getTimestampString(entry.timestamp);
+    } else if (access === 'grace-fill') {
+      // 仅保留 title 提示（用户若 hover 知道现在已不可再改；视觉不再强制加背景色）
+      td.title = '已超过正常填入窗口（空白仍可填入一次；已有记录不可再修改）';
     } else if (access === 'future') {
       td.title = '时段未到，暂时不可填入';
+    } else {
+      td.title = '';
     }
   }
 
@@ -1059,9 +1068,7 @@
       textarea.disabled = true;
       textarea.classList.add('note-disabled');
     }
-    if (access === 'grace-fill') {
-      textarea.classList.add('cell-grace');
-    }
+    // 过时未填空白 → 不再给 cell-grace 视觉样式（保持表格原样）；只有真正 noteTimestamp 在容差外的才会高亮(见 updateNoteHighlight)
     textarea.addEventListener('input', _debounce((e) => {
       const h = e.target.dataset.hour;
       saveNote(date, h, e.target.value);
@@ -1087,12 +1094,11 @@
     const meta = getHourMeta(date, hour);
     const ta = tdNote.querySelector('.note-input');
     if (!ta) return;
-    const access = accessHint || getHourAccessState(date, hour);
+    // Q1: 只有真正有 noteTimestamp 并且它在容差外才高亮（过时未填的空白保持原形态，不再因 grace-fill 直接加高亮）
     let highlight = false;
-    if (settings.outOfRangeHighlight && meta.noteTimestamp) {
-      highlight = highlight || isOutOfRange(date, hour, meta.noteTimestamp);
+    if (settings.outOfRangeHighlight && meta.noteTimestamp && (meta.note || '').trim().length > 0) {
+      highlight = isOutOfRange(date, hour, meta.noteTimestamp);
     }
-    if (access === 'grace-fill') highlight = true;
     if (highlight) ta.classList.add('out-of-range');
     else ta.classList.remove('out-of-range');
   }
@@ -1911,14 +1917,9 @@ ${css.styleTag}
   //   same-page navigation (location.href='index.html') / visibilitychange / pageshow needs to
   //   re-apply everything, not just swap the `settings` object reference.
   function applySettingsToDOM() {
-    // 管理者模式锁定：非管理者情况下 timeRangeMinutes 必须固定为 DEFAULT_TIME_RANGE_MINUTES_LOCKED
-    // （用户："时间容差固定，默认值为15分钟"）
-    if (!isAdminMode()) {
-      if (settings.timeRangeMinutes !== DEFAULT_TIME_RANGE_MINUTES_LOCKED) {
-        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
-        try { saveSettings(); } catch (e) {}
-      }
-    }
+    // Q3: 关闭管理者模式时不再自动回写 timeRangeMinutes=15；
+    // 只是 UI 层面禁用 <input>（设置页实现），真正的值保持"上次管理者配置的结果"。
+    // 新用户首次初始化 DEFAULT_SETTINGS.timeRangeMinutes=15，符合"默认值15分钟"要求。
 
     // 1) Font size CSS var --fs
     const fsMap = { 'small': 0.8, 'medium': 1.0, 'large': 1.3, 'xlarge': 1.6 };
@@ -1964,11 +1965,6 @@ ${css.styleTag}
       document.documentElement.dataset.adminMode = on ? '1' : '0';
       // 管理者：给 html 一个样式钩子；主页面显示一个小徽章
       const banner = document.getElementById('reminder-banner');
-      // 非管理者：确保容差是锁定值
-      if (!on && settings.timeRangeMinutes !== DEFAULT_TIME_RANGE_MINUTES_LOCKED) {
-        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
-        try { saveSettings(); } catch (e) {}
-      }
       updateClock(); // 刷新时钟显示的🛠徽章
     };
     window._applyAdminModeToDOM();
@@ -2017,14 +2013,9 @@ ${css.styleTag}
       else localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
     } catch (e) {}
     if (typeof _applyAdminModeToDOM === 'function') _applyAdminModeToDOM();
-    // 非管理者时，锁定 timeRangeMinutes 为固定 15（如果 settings 里不是 15 就强制刷新写入一次保存）
-    if (!on) {
-      if (settings.timeRangeMinutes !== DEFAULT_TIME_RANGE_MINUTES_LOCKED) {
-        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
-        saveSettings();
-      }
-    }
-    showSnackbar(on ? '🛠 管理者模式：已开启（时间容差、时间模拟可改）' : '🔒 管理者模式：已关闭（时间容差固定为15分钟，时间编辑功能已隐藏）');
+    showSnackbar(on
+      ? '🛠 管理者模式：已开启（时间容差、时间模拟可改）'
+      : '🔒 管理者模式：已关闭（时间容差已锁定，时间编辑功能已隐藏）');
   }
   function bindAdminClockTripleClick() {
     const el = document.getElementById('gmt-clock');

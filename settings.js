@@ -19,16 +19,13 @@
     } catch (e) {}
     applyAdminModeToDOM();
     if (!on) {
-      // 非管理者：锁定 timeRangeMinutes 为固定15，并禁用时钟编辑
-      if (settings.timeRangeMinutes !== DEFAULT_TIME_RANGE_MINUTES_LOCKED) {
-        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
-        saveSettings();
-      }
-      // 自动切回实时时间模式（锁定时避免模拟时间被继续"留"在模拟态）
+      // 关闭管理者模式时：
+      // Q3 - 不再自动回写 timeRangeMinutes=15，保留管理者最终设置值；
+      // 时间模拟会自动切回实时（时间模拟本身属于"时间编辑功能"，关闭时自动回到实时，避免普通用户被"假时间"一直误导）
       try { localStorage.removeItem(STORAGE_KEY_TIME_OFFSET); } catch (e) {}
       _refreshClockDisplay();
     }
-    showSnackbar(on ? '🛠 管理者模式：已开启' : '🔒 管理者模式：已关闭（时间容差固定15分钟，时间编辑功能隐藏）');
+    showSnackbar(on ? '🛠 管理者模式：已开启' : '🔒 管理者模式：已关闭（时间容差已锁定，时间编辑功能隐藏）');
   }
 
   // ===== Storage Helpers =====
@@ -726,9 +723,8 @@
 
     document.getElementById('time-range').addEventListener('input', (e) => {
       if (!isAdminMode()) {
-        e.target.value = String(DEFAULT_TIME_RANGE_MINUTES_LOCKED);
-        settings.timeRangeMinutes = DEFAULT_TIME_RANGE_MINUTES_LOCKED;
-        persistHighlightSettings();
+        // Q3：关闭管理者时，不再写回 15；回显当前 settings.timeRangeMinutes（保持锁定值，不允许用户改，但也不强制改）
+        e.target.value = String(settings.timeRangeMinutes ?? DEFAULT_TIME_RANGE_MINUTES_LOCKED);
         return;
       }
       settings.timeRangeMinutes = parseInt(e.target.value) || 15;
@@ -972,12 +968,12 @@
     const editRow = document.getElementById('clock-edit-row');
     if (!on && editRow) editRow.classList.add('hidden');
 
-    // (b) 时间容差 input：非管理者 disabled + 锁定为 DEFAULT_TIME_RANGE_MINUTES_LOCKED
+    // (b) 时间容差 input：管理者打开才能编辑；关闭时 disabled，但 value=settings.timeRangeMinutes（不强制回 15）
     const tr = document.getElementById('time-range');
     const hint = document.getElementById('time-range-locked-hint');
     if (tr) {
       tr.disabled = !on;
-      tr.value = String(on ? (settings.timeRangeMinutes ?? DEFAULT_TIME_RANGE_MINUTES_LOCKED) : DEFAULT_TIME_RANGE_MINUTES_LOCKED);
+      tr.value = String(settings.timeRangeMinutes ?? DEFAULT_TIME_RANGE_MINUTES_LOCKED);
     }
     if (hint) hint.style.display = on ? 'none' : 'inline-block';
   }

@@ -196,12 +196,12 @@
     <div class="settings-row">
       <label for="time-range">
         时间容差 (分钟)
-        <span id="time-range-locked-hint" style="display:none;font-size:12px;color:#666;">（锁定15分钟：连击主页时钟3次解锁管理者模式）</span>
+        <span id="time-range-locked-hint" style="display:none;font-size:12px;color:#666;">（已锁定：连击主页时钟3次解锁管理者模式方可修改）</span>
       </label>
       <input type="number" id="time-range" min="0" max="120" value="15" style="max-width:80px;">
     </div>
     <div class="range-display">
-      规则（管理者模式可调）：<br>
+      规则：<br>
       • 未到该小时时间，不可填入（灰显）；<br>
       • 整点后"容差 N 分钟"为正常窗口（默认 15 分钟）：可填入/可修改已填内容；<br>
       • 超出该容差窗口：仅可填入空白项（不允许改已有记录），且该时段高亮提示。
