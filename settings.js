@@ -25,7 +25,6 @@
       try { localStorage.removeItem(STORAGE_KEY_TIME_OFFSET); } catch (e) {}
       _refreshClockDisplay();
     }
-    showSnackbar(on ? '🛠 管理者模式：已开启' : '🔒 管理者模式：已关闭（时间容差已锁定，时间编辑功能隐藏）');
   }
 
   // ===== Storage Helpers =====
@@ -970,19 +969,16 @@
 
     // (b) 时间容差 input：管理者打开才能编辑；关闭时 disabled，但 value=settings.timeRangeMinutes（不强制回 15）
     const tr = document.getElementById('time-range');
-    const hint = document.getElementById('time-range-locked-hint');
     if (tr) {
       tr.disabled = !on;
       tr.value = String(settings.timeRangeMinutes ?? DEFAULT_TIME_RANGE_MINUTES_LOCKED);
     }
-    if (hint) hint.style.display = on ? 'none' : 'inline-block';
   }
 
   // 管理者三连击：在设置页"当前时间(GMT)"标题 + 时钟显示 任意一处连击三下都可以切换
   function bindAdminTripleClick(targetEl) {
     if (!targetEl) return;
     targetEl.style.cursor = 'pointer';
-    targetEl.title = '连续点击3次可切换管理者模式';
     let clicks = 0; let timer = null;
     function reset() { clicks = 0; if (timer) { clearTimeout(timer); timer = null; } }
     targetEl.addEventListener('click', () => {

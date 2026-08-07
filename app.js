@@ -976,10 +976,13 @@
       makeResizable(item.th, item.key);
     });
 
-    // ===== Multi-row header per-row sticky top (写入 4 个 CSS 变量：逐行 top + thead 总高 padding-top 占位 =====
-    // CSS 3 行 thead tr:nth-child(n) 分别使用 --thead-r0-top / --thead-r1-top / --thead-r2-top；
-    // .status-table 的 padding-top 用 --thead-total-height，防止 tbody 第 1 行被 3 行 sticky thead 遮挡在下面。
-    // 注：不再对 tr 写 inline style.position/top，完全由 CSS 声明（之前 inline top 与 rowspan 的合成层叠层冲突会让第1行parent名/第2行cat名"看不见"）。
+    // ===== Multi-row header per-row sticky top（写入 3 个 CSS 变量：供 styles.css 里 thead tr:nth-child(n) th 使用 =====
+    // 不再写 table padding-top / --thead-total-height（sticky 不占文档流空间，不需要额外占位，加了反而会让 00:00 与表头并排错位）。
+    // 原理：
+    //   row0.th.top = baseOffset (app-header + sticky-top-controls 总高度)
+    //   row1.th.top = base + row0.height
+    //   row2.th.top = base + row0.height + row1.height
+    // 全部 position: sticky 都声明在 th 上（不在 tr/thead 上）—— 否则 Safari/iOS Chrome 将完全不生效（这就是用户截图上表头不随滚动动的根因）。
     function refreshHeaderRowStickyTops() {
       try {
         const headEl = document.getElementById('table-head');
@@ -987,29 +990,23 @@
         const rows = Array.from(headEl.querySelectorAll('tr'));
         const basePx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--thead-sticky-top')) || 0;
         const heights = [0, 0, 0];
-        // 先读取 3 行的真实 offsetHeight（此时浏览器已经 layout，值是稳定的，不再预估）
         for (let i = 0; i < Math.min(rows.length, 3); i++) {
           heights[i] = rows[i].getBoundingClientRect().height || rows[i].offsetHeight || 0;
         }
         const r0 = basePx;
         const r1 = r0 + heights[0];
         const r2 = r1 + heights[1];
-        const totalH = heights[0] + heights[1] + heights[2];
         document.documentElement.style.setProperty('--thead-r0-top', r0 + 'px');
         document.documentElement.style.setProperty('--thead-r1-top', r1 + 'px');
         document.documentElement.style.setProperty('--thead-r2-top', r2 + 'px');
-        // 让 .status-table 的 padding-top 自动占满 thead 总高 → tbody 第 1 行开始位置 = thead 末行底部 → 无遮挡
-        document.documentElement.style.setProperty('--thead-total-height', totalH + 'px');
       } catch (e) {}
     }
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
       window.requestAnimationFrame(refreshHeaderRowStickyTops);
-      // 字体 / Safari 在字体加载后高度可能变，再在 120ms、500ms、1200ms 后各补三次。
-      [120, 500, 1200].forEach(t => setTimeout(refreshHeaderRowStickyTops, t));
+      [50, 250, 1000].forEach(t => setTimeout(refreshHeaderRowStickyTops, t));
     } else {
       setTimeout(refreshHeaderRowStickyTops, 0);
     }
-    // 挂到全局，供 resize/刷新 sticky 偏移时复用
     window._refreshHeaderRowStickyTops = refreshHeaderRowStickyTops;
   }
 
@@ -2010,15 +2007,11 @@ ${css.styleTag}
       else localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
     } catch (e) {}
     if (typeof _applyAdminModeToDOM === 'function') _applyAdminModeToDOM();
-    showSnackbar(on
-      ? '🛠 管理者模式：已开启（时间容差、时间模拟可改）'
-      : '🔒 管理者模式：已关闭（时间容差已锁定，时间编辑功能已隐藏）');
   }
   function bindAdminClockTripleClick() {
     const el = document.getElementById('gmt-clock');
     if (!el) return;
     el.style.cursor = 'pointer';
-    el.title = '连续点击3次可切换管理者模式';
     let clicks = 0;
     let timer = null;
     function reset() { clicks = 0; if (timer) { clearTimeout(timer); timer = null; } }

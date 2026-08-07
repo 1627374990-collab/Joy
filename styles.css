@@ -82,63 +82,54 @@ input, textarea {
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
 }
 
-/* ===== 多行表头逐行 sticky 顶部堆叠（与纵向时间 hour-cell 常显模式一致：每行独立计算 top 累积值） =====
+/* ===== 3 行表头 + 第1列小时同时 sticky（类比"横滚时时间列仍可见"的 sticky left 效果，实现"竖滚时表头仍可见"的 sticky top 效果）=====
+   - 【为什么必须写在 th 上】position: sticky 必须写在 <th>/<td>（table-cell 元素）上。
+     写在 <thead>/<tr> 上在 Safari/iOS Chrome/微信内置浏览器 100% 不生效，这就是用户截图上表头不跟随滚动的根因。
+     横滚时间列之所以生效，正是因为我们把 sticky left 写在了 td.hour-cell / th.hour-cell 单元格上。
    - 基础偏移：app-header + sticky-top-controls 总高度，写入 CSS 变量 --thead-sticky-top
-   - 每行 tr 的最终 top 由 3 个 CSS 变量决定（JS 读取真实行高后写入 html）：
+   - 每行 th 的最终 top 由 3 个 CSS 变量决定（JS 读取真实行高后写入 html root）：
        --thead-r0-top = base
        --thead-r1-top = base + row0.height
        --thead-r2-top = base + row0.height + row1.height
-   - 不再用 JS 动态写 style.position / style.top，全靠 CSS 声明，避免：
-       a) inline style 覆盖导致 rowspan=3 的"检查内容/平台及设备"(行1行2 th) 视觉被同一 top 堆叠覆盖 造成"看不见"；
-       b) transform / position sticky 交叉时在 iOS Safari / Chrome 上的渲染错位（row2 row3 合成层覆盖到 row1 row2 的文字上）。
+   - rowspan=3 的"时间(GMT)" th：top 使用 row0 的值（视觉上从第 1 行起始），同时 left: 0 保持 sticky left
+   - 所有 sticky th 必须显式 background:#f8f9fa（禁止 inherit）—— inherit 合成层提升时会变透明，导致 tbody 内容穿透到表头上来
 */
 
 .status-table thead {
-  position: static; /* thead 本身不作为 sticky 容器（否则无法给子 tr 分别设不同 top）*/
+  position: static; /* thead 本身不作为 sticky 容器（否则无法给子 th 分别设不同 top）*/
 }
 
-.status-table thead tr {
-  /* 每行 <tr> 自己 sticky，top 由对应 --thead-rX-top CSS 变量提供 */
+/* 移除了 thead tr 上所有 position: sticky / top / z-index / transform（不生效+导致合成层覆盖 row1 row2 文字）
+   下面把 sticky 全部写到 tr 内部的 <th> 单元格上，每一行 th 独立吸顶高度：*/
+.status-table thead tr:nth-child(1) th {
   position: sticky;
-  background: #f8f9fa;
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
-  will-change: transform;
-}
-/* 第 1 行：parents（检查内容：TMs Fresh / Unrecoverd...）*/
-.status-table thead tr:nth-child(1) {
   top: var(--thead-r0-top, var(--thead-sticky-top, 0px));
   z-index: 20;
+  background: #f8f9fa;
 }
-/* 第 2 行：平台及设备名（Open SCC / DFH-4 / ...）*/
-.status-table thead tr:nth-child(2) {
+.status-table thead tr:nth-child(2) th {
+  position: sticky;
   top: var(--thead-r1-top, var(--thead-sticky-top, 0px));
   z-index: 21;
+  background: #f8f9fa;
 }
-/* 第 3 行：子状态（7 / M&C / 6C / ...）*/
-.status-table thead tr:nth-child(3) {
+.status-table thead tr:nth-child(3) th {
+  position: sticky;
   top: var(--thead-r2-top, var(--thead-sticky-top, 0px));
   z-index: 22;
-}
-/* 兜底：如果某张表只有 1 行/2 行表头，剩下的 CSS 变量用 base 也不会错位 */
-
-/* thead 内每个 th 的背景必须声明（sticky tr 的透明背景会透过下面的 tbody 内容）*/
-.status-table thead th {
-  background: inherit;
-}
-
-/* 交叉点（表头行的 sticky left 时间格）z-index 要高于其他表头列（横滚 + 竖滚叠加时不被右侧表头覆盖 左上角 GMT 时间块） */
-.status-table thead th.hour-cell {
-  z-index: 31;
   background: #f8f9fa;
-  position: sticky; /* sticky left:0 + sticky top: 与第 1 行 thead 同 top 保持一起滚 */
+}
+
+/* 交叉点（表头里 rowspan=3 的 sticky left 时间块）z-index 必须最高：横滚 + 竖滚叠加时左上角时间块不被右侧列覆盖 */
+.status-table thead th.hour-cell {
+  position: sticky;
   left: 0;
   top: var(--thead-r0-top, var(--thead-sticky-top, 0px));
+  z-index: 31;
+  background: #f8f9fa;
 }
 
-/* table-wrapper 加 padding-top 避免 sticky 堆叠后遮挡第一行数据（不再依赖 thead 整体高度预估） */
+/* scroll-margin-top：让"#anchor 跳转"时避开顶部吸顶控件高度（跟 sticky 吸顶位置本身无关，只是 anchor 跳转的 offset）*/
 .table-wrapper { scroll-margin-top: var(--thead-sticky-top, 0px); }
 .history-list { scroll-margin-top: var(--thead-sticky-top, 0px); }
 
@@ -245,14 +236,7 @@ input, textarea {
   border-spacing: 0;
   font-size: 13px;
   table-layout: fixed;
-  /* 给 tbody 第 1 行预留空间：3 行 sticky thead 悬浮在 table 上方，
-     如果不把 table 内容区向下推 h0+h1+h2 像素，00:00 那行整个会被表头压在下面造成"遮挡时段行"。
-     JS 会在 renderTable 后读取实际 thead 总行高，写入 --thead-total-height 变量。
-     注意 table 的 padding-top 必须声明在 table 盒模型而非 tbody（tbody 不接受 padding），
-     且不能放在 wrapper，因为横滚时 table 比 wrapper 宽，wrapper padding 会被带到左侧留白 导致列错位。 */
-  padding-top: var(--thead-total-height, 120px);
-  /* 注意：contain: size + sticky thead 在某些版本的 Safari 会强制剪切 thead 溢出到 table 盒外面，
-     导致 sticky thead 不可见；这里去掉 size，保留 layout paint（size 主要是重算高度优化，我们没那么高重算频率）。 */
+  /* 注意：contain: size 在 Safari 会强制剪切 sticky thead 溢出到 table 盒外的部分，导致 sticky 表头不可见；这里只保留 layout paint */
   contain: layout paint;
 }
 
