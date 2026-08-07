@@ -133,7 +133,9 @@ input, textarea {
 .status-table thead th.hour-cell {
   z-index: 31;
   background: #f8f9fa;
-  position: sticky; /* 保持 sticky left (另在 table th.hour-cell 里声明 left:0) */
+  position: sticky; /* sticky left:0 + sticky top: 与第 1 行 thead 同 top 保持一起滚 */
+  left: 0;
+  top: var(--thead-r0-top, var(--thead-sticky-top, 0px));
 }
 
 /* table-wrapper 加 padding-top 避免 sticky 堆叠后遮挡第一行数据（不再依赖 thead 整体高度预估） */
@@ -225,19 +227,16 @@ input, textarea {
 /* ===== Table ===== */
 .table-wrapper {
   overflow-x: auto;
-  overflow-y: visible;
+  overflow-y: visible; /* 关键：纵向必须 visible → sticky thead 的 containing block 才是 viewport（否则 transform/容器自身会让 sticky 参照错 → 表头不随滚动走）*/
   margin: 10px 12px 0;
   background: #fff;
   border-radius: 12px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
   -webkit-overflow-scrolling: touch;
-  /* 移动端水平表格滚动：合成器接管，减少 layout/reflow 掉帧 */
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
-  will-change: scroll-position;
+  /* 注意：禁止给 wrapper 设置 transform: translateZ(0) / contain: layout/paint/size；
+     它们会强制创建"新 containing block + 合成层"，导致内部的 sticky thead 不再以 viewport 为参照物 → 滚动时表头看起来完全不动。 */
   overscroll-behavior-x: contain;
   touch-action: pan-x pan-y;
-  contain: layout paint;
 }
 
 .status-table {
@@ -246,8 +245,15 @@ input, textarea {
   border-spacing: 0;
   font-size: 13px;
   table-layout: fixed;
-  /* 固定表格 + contain：减少 Safari 布局阶段对未修改单元格的重算 */
-  contain: layout paint size;
+  /* 给 tbody 第 1 行预留空间：3 行 sticky thead 悬浮在 table 上方，
+     如果不把 table 内容区向下推 h0+h1+h2 像素，00:00 那行整个会被表头压在下面造成"遮挡时段行"。
+     JS 会在 renderTable 后读取实际 thead 总行高，写入 --thead-total-height 变量。
+     注意 table 的 padding-top 必须声明在 table 盒模型而非 tbody（tbody 不接受 padding），
+     且不能放在 wrapper，因为横滚时 table 比 wrapper 宽，wrapper padding 会被带到左侧留白 导致列错位。 */
+  padding-top: var(--thead-total-height, 120px);
+  /* 注意：contain: size + sticky thead 在某些版本的 Safari 会强制剪切 thead 溢出到 table 盒外面，
+     导致 sticky thead 不可见；这里去掉 size，保留 layout paint（size 主要是重算高度优化，我们没那么高重算频率）。 */
+  contain: layout paint;
 }
 
 .status-table th,

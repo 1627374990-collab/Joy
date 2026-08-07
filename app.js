@@ -976,14 +976,10 @@
       makeResizable(item.th, item.key);
     });
 
-    // ===== Multi-row header per-row sticky top (写入 3 个 CSS 变量：供 styles.css 里 nth-child(1/2/3) 使用 =====
-    // 不再对 tr 写 inline style.position / style.top（避免 rowspan 跨行的 行1行2文字 被合成层堆叠覆盖 → 用户反馈"检查内容/平台及设备不见了"）。
-    // 原理：
-    //   row0.top = baseOffset (app-header + sticky-top-controls 总高度)
-    //   row1.top = base + row0.height
-    //   row2.top = base + row0.height + row1.height
-    // 以上结果分别写入 CSS 变量：--thead-r0-top / --thead-r1-top / --thead-r2-top
-    // CSS 侧 .status-table thead tr:nth-child(n) 分别使用这 3 个变量作为 top。
+    // ===== Multi-row header per-row sticky top (写入 4 个 CSS 变量：逐行 top + thead 总高 padding-top 占位 =====
+    // CSS 3 行 thead tr:nth-child(n) 分别使用 --thead-r0-top / --thead-r1-top / --thead-r2-top；
+    // .status-table 的 padding-top 用 --thead-total-height，防止 tbody 第 1 行被 3 行 sticky thead 遮挡在下面。
+    // 注：不再对 tr 写 inline style.position/top，完全由 CSS 声明（之前 inline top 与 rowspan 的合成层叠层冲突会让第1行parent名/第2行cat名"看不见"）。
     function refreshHeaderRowStickyTops() {
       try {
         const headEl = document.getElementById('table-head');
@@ -998,11 +994,12 @@
         const r0 = basePx;
         const r1 = r0 + heights[0];
         const r2 = r1 + heights[1];
+        const totalH = heights[0] + heights[1] + heights[2];
         document.documentElement.style.setProperty('--thead-r0-top', r0 + 'px');
         document.documentElement.style.setProperty('--thead-r1-top', r1 + 'px');
         document.documentElement.style.setProperty('--thead-r2-top', r2 + 'px');
-        // 交叉点：thead th.hour-cell（跨 3 行 rowspan 的 sticky left 时间格）
-        // 只在 CSS 中 sticky left: 0，并且 top = base（它跟着第1行一起滚，不逐行变）——之前 JS 覆盖 style.top 导致它错位，这里移除
+        // 让 .status-table 的 padding-top 自动占满 thead 总高 → tbody 第 1 行开始位置 = thead 末行底部 → 无遮挡
+        document.documentElement.style.setProperty('--thead-total-height', totalH + 'px');
       } catch (e) {}
     }
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
