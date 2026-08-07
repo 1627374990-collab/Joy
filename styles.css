@@ -1638,42 +1638,11 @@ tbody tr.row-future td.hour-cell {
   align-items: center;
 }
 
-/* Column Resizer (drag handle) - Excel-style */
-.column-resizer {
-  position: absolute;
-  top: 0;
-  right: -4px;
-  width: 8px;
-  height: 100%;
-  background: transparent;
-  cursor: col-resize;
-  z-index: 20;
-  user-select: none;
-  touch-action: none;
-  transition: background 0.15s;
-}
-
-.column-resizer:hover,
-.column-resizer:active {
-  background: rgba(25, 118, 210, 0.4);
-  width: 8px;
-}
-
-/* Show a visual indicator on the right edge of resizable columns */
+/* Column Resizer / 拖拽手柄相关样式：已移除（取消列宽修改功能，减少表头常显障碍）。
+   同时解除 status-table th 的 position: relative（之前为了 resizer absolute 定位，现在移除能减少表头合成层对 sticky 堆叠高度的影响）*/
+/* (placeholder: 保留选择器名以防旧扩展引用，但内容为空) */
 .status-table th {
-  position: relative;
-}
-
-/* Show a visual indicator on the right edge of resizable columns */
-.status-table th:not([colspan]),
-.status-table th[colspan="1"] {
-  position: relative;
-}
-
-/* Dragging state feedback for the entire page */
-body.col-resize-cursor * {
-  cursor: col-resize !important;
-  user-select: none !important;
+  position: static; /* 清除旧的 position: relative（来自已删除的拖拽手柄规则）*/
 }
 
 /* ===== Font Size Scaling (CSS variable --fs) ===== */

@@ -356,10 +356,13 @@
     return type; // 'hour' / 'note' / 'time' / 'del'
   }
 
+  // 取消列宽修改功能（减少表头常显障碍）：
+  // 不再读 settings.columnWidths 用户历史保存值，统一使用 DEFAULT_SETTINGS.columnWidths 中定义的默认列宽；
+  // 这样可避免用户拖拽后列宽/表头高度异常，冻结列 left 累加值也更稳定。
   function getColumnWidth(key) {
-    return settings.columnWidths && typeof settings.columnWidths[key] === 'number'
-      ? settings.columnWidths[key]
-      : settings.defaultColWidth;
+    const defaults = (DEFAULT_SETTINGS && DEFAULT_SETTINGS.columnWidths) || {};
+    if (typeof defaults[key] === 'number' && defaults[key] > 0) return defaults[key];
+    return (settings.defaultColWidth && settings.defaultColWidth > 0) ? settings.defaultColWidth : 60;
   }
 
   function applyColumnWidth(el, key) {
@@ -368,183 +371,6 @@
     el.style.minWidth = `${w}px`;
     el.style.maxWidth = `${w}px`;
     el.dataset.colKey = key;
-  }
-
-  // ===== Make a header column resizable by drag =====
-  // 移动端性能优化：
-  //   1) 列宽写入 + querySelectorAll 循环都塞到下一帧 requestAnimationFrame 执行
-  //   2) 移动端 touchstart 不调用 preventDefault 防止触发 Safari 300ms 点击延迟合成器阻塞
-  //   3) touchmove 用被动监听无法 preventDefault，但拖拽手柄本身已加 touch-action:none，Safari 合成器不会吞事件
-  function makeResizable(column, key) {
-    column.style.position = 'relative';
-    const resizer = document.createElement('div');
-    resizer.className = 'column-resizer';
-    resizer.title = '拖拽调整列宽';
-    column.appendChild(resizer);
-
-    let startX = 0, startWidth = 0, isResizing = false;
-    let rafPending = false, pendingWidth = 0;
-    const allTargets = () => Array.from(document.querySelectorAll(`[data-col-key="${CSS.escape(key)}"]`));
-
-    // 统一的「写入宽度到 DOM」函数（合并 rAF，避免 60Hz 内多次 layout）
-    function applyWidth(newWidth) {
-      let MIN = 40, MAX = 600;
-      if (key === 'hour') { MIN = 60; MAX = 130; }
-      if (key === 'del') { MIN = 28; MAX = 60; }
-      if (key === 'time') { MIN = 70; MAX = 180; }
-      if (key === 'note') { MIN = 80; MAX = 500; }
-      const clamped = Math.max(MIN, Math.min(MAX, Math.round(newWidth)));
-
-      // Write to colgroup col (single source of truth)
-      const colEl = document.querySelector(`colgroup#status-colgroup col[data-col-key="${CSS.escape(key)}"]`);
-      if (colEl) { colEl.style.width = clamped + 'px'; }
-
-      // Update all THs/TDs with this col-key
-      document.querySelectorAll(`[data-col-key="${CSS.escape(key)}"]`).forEach(el => {
-        el.style.width = clamped + 'px';
-        el.style.minWidth = clamped + 'px';
-        el.style.maxWidth = clamped + 'px';
-      });
-
-      // Sync total table width
-      const tableEl = document.getElementById('status-table') || document.querySelector('.status-table');
-      if (tableEl) {
-        const colEls = document.querySelectorAll('colgroup#status-colgroup col');
-        let total = 0;
-        colEls.forEach(c => {
-          const k = c.dataset.colKey;
-          total += (k === key) ? clamped : getColumnWidth(k);
-        });
-        tableEl.style.width = total + 'px';
-        tableEl.style.minWidth = total + 'px';
-      }
-    }
-
-    function recalcTableWidth() {
-      const tbl = document.getElementById('status-table');
-      if (!tbl) return;
-      // 用 settings.columnWidths 直接求和（无需再遍历 DOM）
-      const custom = settings.columnWidths || {};
-      let total = 0;
-      const seen = new Set();
-      document.querySelectorAll('[data-col-key]').forEach((el) => {
-        const k = el.dataset.colKey;
-        if (seen.has(k)) return;
-        seen.add(k);
-        total += (typeof custom[k] === 'number' && custom[k] > 0) ? custom[k] : getColumnWidth(k);
-      });
-      tbl.style.width = total + 'px';
-      tbl.style.minWidth = total + 'px';
-    }
-
-    function commitWidthAndTeardown(keepCursor) {
-      if (!isResizing) return;
-      isResizing = false;
-      if (!keepCursor) {
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-        document.body.style.touchAction = '';
-      }
-      const newWidth = column.offsetWidth;
-      if (!settings.columnWidths) settings.columnWidths = {};
-      settings.columnWidths[key] = newWidth;
-      saveSettings();
-      recalcTableWidth();
-      // 如果改变的列是 hour 列 或 第一个平台及其子列 → 冻结列的 left 累计值变了，立即重算冻结 left
-      if (typeof window !== 'undefined' && typeof window._applyFreezeFirstPlatform === 'function') {
-        try { window._applyFreezeFirstPlatform(); } catch (e) {}
-      }
-    }
-
-    resizer.addEventListener('mousedown', (e) => {
-      isResizing = true;
-      startX = e.pageX;
-      startWidth = column.offsetWidth;
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', resize, { passive: true });
-      document.addEventListener('mouseup', stopResize);
-      e.preventDefault();
-      e.stopPropagation();
-    });
-
-    // Touch support for mobile
-    resizer.addEventListener('touchstart', (e) => {
-      if (e.touches.length !== 1) return;
-      isResizing = true;
-      startX = e.touches[0].pageX;
-      startWidth = column.offsetWidth;
-      // 拖拽手柄的 CSS 已设置 touch-action: none，这里不调用 preventDefault 避免 300ms 点击延迟
-      document.body.style.touchAction = 'none';
-      document.addEventListener('touchmove', touchResize, { passive: false });
-      document.addEventListener('touchend', touchStop, { passive: true });
-      document.addEventListener('touchcancel', touchStop, { passive: true });
-      e.stopPropagation();
-    });
-
-    function resize(e) {
-      if (!isResizing) return;
-      applyWidth(Math.max(40, startWidth + (e.pageX - startX)));
-    }
-
-    function touchResize(e) {
-      if (!isResizing || e.touches.length !== 1) return;
-      applyWidth(Math.max(40, startWidth + (e.touches[0].pageX - startX)));
-      // 被动监听不能 preventDefault，但 resizer 本身 touch-action:none，Safari 已不会滚动
-    }
-
-    function stopResize() {
-      document.removeEventListener('mousemove', resize);
-      document.removeEventListener('mouseup', stopResize);
-      commitWidthAndTeardown(false);
-    }
-
-    function touchStop() {
-      document.removeEventListener('touchmove', touchResize);
-      document.removeEventListener('touchend', touchStop);
-      document.removeEventListener('touchcancel', touchStop);
-      commitWidthAndTeardown(true);
-    }
-
-    // Double-click to auto-fit column width (Excel-like behavior)
-    resizer.addEventListener('dblclick', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      autoFitColumn(column, key);
-    });
-    column.addEventListener('dblclick', (e) => {
-      // Only auto-fit if double-clicked on the column header text area (not on buttons)
-      if (e.target === column || e.target.tagName === 'TH') {
-        autoFitColumn(column, key);
-      }
-    });
-
-    function autoFitColumn(col, colKey) {
-      // Find all cells in this column and compute max content width
-      const cells = document.querySelectorAll(`[data-col-key="${CSS.escape(colKey)}"]`);
-      let maxW = 40;
-      const originalW = col.style.width;
-      // Temporarily set to auto to measure content
-      cells.forEach(c => {
-        c.style.width = 'auto';
-        c.style.minWidth = '0';
-        c.style.maxWidth = 'none';
-      });
-      // Measure
-      cells.forEach(c => {
-        const w = c.scrollWidth;
-        if (w > maxW) maxW = w;
-      });
-      // Add padding
-      maxW = Math.min(maxW + 16, 300);
-      // Apply
-      applyWidth(maxW);
-      if (!settings.columnWidths) settings.columnWidths = {};
-      settings.columnWidths[colKey] = maxW;
-      saveSettings();
-      recalcTableWidth();
-      showSnackbar(`列宽已自适应: ${maxW}px`);
-    }
   }
 
   // ===== Pending Count =====
@@ -709,9 +535,6 @@
     // Determine number of header rows: categories(1) + (parents?1:0) + (subs?1:0)
     let headerRows = 1 + (hasParents ? 1 : 0) + (hasSubs ? 1 : 0);
 
-    // Collect the "bottom-most header row" columns (the concrete per-data columns) for resizer attachment
-    const resizerTargets = []; // array of { thElement, colKey }
-
     // ===== Build ordered list of ALL concrete data columns (bottom-level only) =====
     const allConcreteColKeys = [];
     allConcreteColKeys.push('hour');
@@ -762,7 +585,6 @@
     thHour.innerHTML = '时间 (GMT)<br><span class="header-date">' + currentDate + '</span>';
     applyColumnWidth(thHour, 'hour');
     headerTr.appendChild(thHour);
-    resizerTargets.push({ th: thHour, key: 'hour' });
 
     if (hasParents) {
       groups.forEach((g, gi) => {
@@ -792,7 +614,6 @@
     thNote.rowSpan = headerRows;
     applyColumnWidth(thNote, 'note');
     headerTr.appendChild(thNote);
-    resizerTargets.push({ th: thNote, key: 'note' });
 
     const thTime = document.createElement('th');
     thTime.className = 'time-cell';
@@ -800,7 +621,6 @@
     thTime.rowSpan = headerRows;
     applyColumnWidth(thTime, 'time');
     headerTr.appendChild(thTime);
-    resizerTargets.push({ th: thTime, key: 'time' });
 
     head.appendChild(headerTr);
 
@@ -822,7 +642,7 @@
       head.appendChild(catHeaderRow);
     }
 
-    // Sub-status row (only when has subs) -- this is the bottom row, so attach resizers here for sub-cols
+    // Sub-status row (only when has subs)
     let subHeaderRow = null;
     if (hasSubs) {
       subHeaderRow = document.createElement('tr');
@@ -842,11 +662,9 @@
               if (i > 0 && effPid(cat) !== effPid(prevCat)) th.classList.add('parent-divider');
             }
             subHeaderRow.appendChild(th);
-            resizerTargets.push({ th, key: colKey });
           });
         } else {
-          // 无子状态的类别：不能设 visibility:hidden，否则 resizer 无法接收事件
-          // 改为透明背景+空文本，但保持可交互
+          // 无子状态的类别：透明背景空文本占位，保持行列对齐
           const th = document.createElement('th');
           th.textContent = '';
           th.style.color = 'transparent';
@@ -856,33 +674,12 @@
           const prevCat = i > 0 ? orderedCats[i - 1] : null;
           if (i > 0 && effPid(cat) !== effPid(prevCat)) th.classList.add('parent-divider');
           subHeaderRow.appendChild(th);
-          resizerTargets.push({ th, key: colKey });
         }
       });
       head.appendChild(subHeaderRow);
-    } else {
-      // No subs: attach resizers to category row (or parent row) bottom header
-      // Attach to headerTr's category columns (if no parents) or catHeaderRow (if has parents)
-      const targetRowForCatCols = hasParents ? catHeaderRow : headerTr;
-      let colIdx = 0; // index within category columns (skip hour column at 0)
-      const catColsInTargetRow = Array.from(targetRowForCatCols.children).filter(el => {
-        // only columns between hour (first) and note are category columns
-        return true;
-      });
-      // The category columns in target row are those that are NOT hour/note/time/del
-      // In headerTr: 0=hour, then cat cols, then note, time, del
-      // In catHeaderRow: all are cat cols
-      orderedCats.forEach((cat, i) => {
-        // Find the TH for this category in the target row
-        // This is tricky; easier: iterate orderedCats, and just use the resizer on the last-row-of-header for this cat column
-        // Since no subs, each cat = 1 column
-        // We'll create a synthetic "attach here" using the category row header (catHeaderRow if hasParents, else headerTr th for that cat)
-        // But since we can't easily index, collect during iteration
-      });
-      // Simpler: do it during a second pass below
     }
 
-    // ===== FINAL PASS: Attach resizer to BOTTOM-MOST row of every concrete column =====
+    // ===== FINAL PASS: 给表头最后一行的每个 th 补 data-colKey + 宽度（与 allConcreteColKeys 顺序对应）；之前用于 resizer，现在保留仅为 DOM 宽度标注一致 =====
     const allHeaderRows = Array.from(head.querySelectorAll('tr'));
     const bottomHeaderRow = allHeaderRows[allHeaderRows.length - 1];
     const bottomRowTHs = Array.from(bottomHeaderRow.children);
@@ -893,7 +690,6 @@
       const w = getColumnWidth(key);
       th.style.width = w + 'px';
       th.style.minWidth = w + 'px';
-      resizerTargets.push({ th, key });
     });
 
     const now = getNow();
@@ -975,10 +771,8 @@
       tableEl.style.minWidth = totalWidth + 'px';
     }
 
-    // ===== Attach drag resizers to each target column header =====
-    resizerTargets.forEach(item => {
-      makeResizable(item.th, item.key);
-    });
+    // ===== 已取消列宽拖拽修改（减少表头常显障碍）：不再 attach 任何 drag resizer 句柄 =====
+    // (之前在这里执行 resizerTargets.forEach(makeResizable(...))，现已移除)
 
     // ===== Multi-row header per-row sticky top（写入 3 个 CSS 变量：供 styles.css 里 thead tr:nth-child(n) th 使用 =====
     // 原理：
@@ -1584,21 +1378,22 @@
     const orderedCats = [];
     groups.forEach(g => g.cats.forEach(c => orderedCats.push(c)));
 
-    // Flatten columns
-    const cw = (settings && settings.columnWidths) || {};
+    // Flatten columns：取消列宽修改后，PDF 导出也统一使用 DEFAULT_SETTINGS.columnWidths 默认值，不再读 settings 中用户保存的列宽
+    const defaultsCw = (DEFAULT_SETTINGS && DEFAULT_SETTINGS.columnWidths) || {};
     const defW = (settings && settings.defaultColWidth) || 50;
-    const rawWidths = [cw.hour || 80];
+    const rawWidths = [defaultsCw.hour || 80];
     const colHeaders = ['时间'];
     orderedCats.forEach(cat => {
       const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
       subs.forEach(sub => {
-        rawWidths.push(cw[cat.id + '_' + sub.id] || defW);
+        const k = `${cat.id}_${sub.id}`;
+        rawWidths.push(defaultsCw[k] || defW);
         colHeaders.push(sub.name || cat.name);
       });
     });
-    rawWidths.push(cw.note || 130);
+    rawWidths.push(defaultsCw.note || 130);
     colHeaders.push('Note');
-    rawWidths.push(cw.time || 85);
+    rawWidths.push(defaultsCw.time || 85);
     colHeaders.push('填入');
 
     // Scale to fit target width
