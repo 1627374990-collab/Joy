@@ -129,6 +129,44 @@ input, textarea {
   background: #f8f9fa;
 }
 
+/* ====== 左侧第 2 冻结区：第一个平台（Open SCC / ...）+ 其下子项：类比时间列的 sticky left 效果 ======
+ * 用法：JS 在渲染表头/表体后把对应的 th/td 加上下面 4 个类之一，并写入各自的 style.left = 累计宽度（紧跟在 hour-cell 右边）。
+ * 竖滚吸顶的 top 由 thead tr:nth-child(n) th 提供的 top 继承（position:sticky 支持 top+left 同时声明叠加，互不冲突）。
+ * z-index 阶梯：
+ *   .hour-cell                  z31  最左上的"总锚点"，覆盖所有其他冻结列
+ *   .sticky-platform-header     z28  平台名（categories 行 row1）的 th，吸顶 row2.top
+ *   .sticky-sub-header          z29  平台下各子项（subs 行 row2）的 th，吸顶 row2.top，要比平台名更高（横滚后子项在平台名右边，需要先盖住）
+ *   .sticky-platform-td / .sticky-sub-td  z6：tbody 对应单元格，sticky left，z-index 高于其他 td(5)，低于 thead(20~31)
+ */
+.status-table thead th.sticky-platform-header,
+.status-table thead th.sticky-sub-header {
+  position: sticky;
+  background: #f8f9fa;
+}
+.status-table thead th.sticky-platform-header {
+  z-index: 28;
+}
+.status-table thead th.sticky-sub-header {
+  z-index: 29;
+}
+
+.status-table tbody td.sticky-platform-td,
+.status-table tbody td.sticky-sub-td {
+  position: sticky;
+  background: inherit; /* 与 tbody 行条纹色一致，避免横滚冻结区颜色错位 */
+  z-index: 6;
+}
+
+/* 移动端横滚时，冻结列 + 冻结时间格的合成层提升：仅 left 冻结列提层，避免重算整个表，
+   但注意不能把 wrapper 整体提层（已去掉 wrapper 的 translateZ，这里只对单元格单独提）*/
+.status-table thead th.sticky-platform-header,
+.status-table thead th.sticky-sub-header,
+.status-table tbody td.sticky-platform-td,
+.status-table tbody td.sticky-sub-td {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
 /* scroll-margin-top：让"#anchor 跳转"时避开顶部吸顶控件高度（跟 sticky 吸顶位置本身无关，只是 anchor 跳转的 offset）*/
 .table-wrapper { scroll-margin-top: var(--thead-sticky-top, 0px); }
 .history-list { scroll-margin-top: var(--thead-sticky-top, 0px); }

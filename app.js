@@ -450,6 +450,10 @@
       settings.columnWidths[key] = newWidth;
       saveSettings();
       recalcTableWidth();
+      // 如果改变的列是 hour 列 或 第一个平台及其子列 → 冻结列的 left 累计值变了，立即重算冻结 left
+      if (typeof window !== 'undefined' && typeof window._applyFreezeFirstPlatform === 'function') {
+        try { window._applyFreezeFirstPlatform(); } catch (e) {}
+      }
     }
 
     resizer.addEventListener('mousedown', (e) => {
@@ -977,12 +981,11 @@
     });
 
     // ===== Multi-row header per-row sticky top（写入 3 个 CSS 变量：供 styles.css 里 thead tr:nth-child(n) th 使用 =====
-    // 不再写 table padding-top / --thead-total-height（sticky 不占文档流空间，不需要额外占位，加了反而会让 00:00 与表头并排错位）。
     // 原理：
-    //   row0.th.top = baseOffset (app-header + sticky-top-controls 总高度)
+    //   row0.th.top = baseOffset (app.js refreshTheadStickyOffset 计算：dashboard wrapper 内部吸顶 base = 0；page-scroll 时 = 顶部控件总高)
     //   row1.th.top = base + row0.height
     //   row2.th.top = base + row0.height + row1.height
-    // 全部 position: sticky 都声明在 th 上（不在 tr/thead 上）—— 否则 Safari/iOS Chrome 将完全不生效（这就是用户截图上表头不随滚动动的根因）。
+    // 全部 position: sticky 都声明在 th 上（不在 tr/thead 上）—— 否则 Safari/iOS Chrome 将完全不生效。
     function refreshHeaderRowStickyTops() {
       try {
         const headEl = document.getElementById('table-head');
@@ -1008,6 +1011,98 @@
       setTimeout(refreshHeaderRowStickyTops, 0);
     }
     window._refreshHeaderRowStickyTops = refreshHeaderRowStickyTops;
+
+    // ===== 左冻结列 #2：把第 1 个平台(categories row) + 其下所有子项 与 hour-cell 一样 sticky left 常显 =====
+    // 用户需求："把 平台及设备管理 项的子项也设置成常显的" = 类比向右横滚仍能看到小时列的 sticky left 效果，向右横滚也仍能看到第一个平台（Open SCC / DFH-4 等）以及其子项。
+    // 实现：
+    //   1) 先从 colgroup 读出每列实际宽度（含用户 resize 后的宽度），累计计算每个待冻结列的 left = hour宽 + 前面已经冻结列宽累计
+    //   2) thead：row1 的 第 1 个 category th → sticky-platform-header；row2 对应的所有子 th → sticky-sub-header（都加 style.left 计算值 + 类）
+    //   3) tbody：每一行里对应 platform 第 1 个 cat 的 N 个子 td → sticky-sub-td（无 subs 时就是一个 sticky-platform-td）
+    //   4) 竖滚吸顶的 top 由 .status-table thead tr:nth-child(n) th { top: var(--thead-rX-top) } 自动提供（sticky 元素支持 top+left 同时声明，叠加生效）
+    function applyFreezeFirstPlatform() {
+      try {
+        const tableEl = document.getElementById('status-table') || document.querySelector('.status-table');
+        const colgroup = tableEl ? tableEl.querySelector('colgroup#status-colgroup') : null;
+        if (!colgroup) return;
+        const cols = Array.from(colgroup.querySelectorAll('col'));
+        function colWidthAt(i) { return cols[i] ? (parseFloat(cols[i].style.width) || cols[i].offsetWidth || 0) : 0; }
+        if (orderedCats.length === 0) return;
+        const hourW = colWidthAt(0);
+        const firstCat = orderedCats[0];
+        const subCount = firstCat.subStatuses && firstCat.subStatuses.length > 0 ? firstCat.subStatuses.length : 1;
+        const headEl = document.getElementById('table-head');
+        if (!headEl) return;
+        const rows = Array.from(headEl.querySelectorAll('tr'));
+        const catRowIdx = hasParents ? 1 : 0;
+        const subRowIdx = hasSubs ? (hasParents ? 2 : 1) : -1;
+        const parentRowIdx = hasParents ? 0 : -1;
+        const firstConcreteIdx = 1; // firstCat 的第 1 个子列在 allConcreteColKeys 里的索引（0=hour）
+        const cumulLeft = hourW;
+        // calc prefix widths for subs: left[k] = cumulLeft + sum(colWidthAt(firstConcreteIdx..firstConcreteIdx+k-1))
+        const subLefts = [];
+        for (let k = 0; k < subCount; k++) {
+          let left = cumulLeft;
+          for (let j = 0; j < k; j++) left += colWidthAt(firstConcreteIdx + j);
+          subLefts.push(left);
+        }
+        // 1) categories row 第 0 个 cat th = firstCat
+        const catRow = rows[catRowIdx];
+        if (catRow) {
+          const catThs = Array.from(catRow.querySelectorAll('th'));
+          const firstCatTh = catThs[0];
+          if (firstCatTh) {
+            firstCatTh.classList.add('sticky-platform-header');
+            firstCatTh.style.left = cumulLeft + 'px';
+          }
+        }
+        // 2) parents row 的第 0 个 parent th（组名"检查内容"一起冻结）
+        if (parentRowIdx >= 0 && groups.length > 0) {
+          const parentRow = rows[parentRowIdx];
+          if (parentRow) {
+            const parentThs = Array.from(parentRow.querySelectorAll('th'));
+            // parentRow th 顺序：[0]=hour-cell, [1]=first parent group, [2]=second group...
+            const firstParentTh = parentThs[1];
+            if (firstParentTh) {
+              firstParentTh.classList.add('sticky-platform-header');
+              firstParentTh.style.left = cumulLeft + 'px';
+            }
+          }
+        }
+        // 3) subs row 第 0..subCount-1 个 th = firstCat 的子项
+        if (subRowIdx >= 0) {
+          const subRow = rows[subRowIdx];
+          if (subRow) {
+            const subThs = Array.from(subRow.querySelectorAll('th'));
+            for (let k = 0; k < subCount; k++) {
+              const subTh = subThs[k];
+              if (!subTh) continue;
+              subTh.classList.add('sticky-sub-header');
+              subTh.style.left = subLefts[k] + 'px';
+            }
+          }
+        }
+        // 4) tbody 每一行 firstConcreteIdx .. firstConcreteIdx + subCount - 1
+        const bodyEl = document.getElementById('table-body');
+        if (bodyEl) {
+          Array.from(bodyEl.querySelectorAll('tr')).forEach(bodyTr => {
+            const tds = Array.from(bodyTr.querySelectorAll('td'));
+            for (let k = 0; k < subCount; k++) {
+              const td = tds[firstConcreteIdx + k];
+              if (!td) continue;
+              td.classList.add(subCount > 1 ? 'sticky-sub-td' : 'sticky-platform-td');
+              td.style.left = subLefts[k] + 'px';
+            }
+          });
+        }
+      } catch (e) {}
+    }
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(applyFreezeFirstPlatform);
+      [50, 250, 1000].forEach(t => setTimeout(applyFreezeFirstPlatform, t));
+    } else {
+      setTimeout(applyFreezeFirstPlatform, 0);
+    }
+    window._applyFreezeFirstPlatform = applyFreezeFirstPlatform;
   }
 
   function renderStatusCell(td, date, hour, categoryId, subId, accessHint) {
