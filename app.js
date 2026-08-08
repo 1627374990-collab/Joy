@@ -911,28 +911,8 @@
         // ========= row 索引 =========
         const catRowIdx = hasParents ? 1 : 0;
         const subRowIdx = hasSubs ? (hasParents ? 2 : 1) : -1;
-        const parentRowIdx = hasParents ? 0 : -1;
 
-        // ========= 1) parents row：冻结 firstCat 所属的检查组名 th（若有 parents） =========
-        if (parentRowIdx >= 0 && firstGroupIdxInMixedRow >= 0 && groups.length > 0) {
-          const parentRow = rows[parentRowIdx];
-          if (parentRow) {
-            const parentThs = Array.from(parentRow.querySelectorAll('th'));
-            const firstGroupTh = parentThs[firstGroupIdxInMixedRow];
-            if (firstGroupTh) {
-              clearFrozen(firstGroupTh);
-              firstGroupTh.classList.add('sticky-platform-header');
-              firstGroupTh.setAttribute('data-frozen', '1');
-              firstGroupTh.setAttribute('data-row', String(parentRowIdx));
-              firstGroupTh.setAttribute('data-col', String(firstGroupIdxInMixedRow));
-              firstGroupTh.setAttribute('data-left', cumulLeft.toFixed(1));
-              firstGroupTh.style.left = cumulLeft + 'px';
-              // firstGroup 跨多个 cat，宽度 = 跨的所有列宽之和；冻结时按左边对齐即可（平台名 + 子项也在这下面）
-            }
-          }
-        }
-
-        // ========= 2) categories row：冻结 firstCat 平台名 th =========
+        // ========= 1) categories row：冻结 firstCat 平台名 th（注意：不冻结检查组名 parents row，避免跨列太大盖住后面滚动列；用户反馈只需要第一平台 + 子项类比时间列常显） =========
         const catRow = rows[catRowIdx];
         if (catRow) {
           const catThs = Array.from(catRow.querySelectorAll('th'));
@@ -945,6 +925,8 @@
             firstCatTh.setAttribute('data-col', String(firstCatInCatMixedRowIdx));
             firstCatTh.setAttribute('data-left', cumulLeft.toFixed(1));
             firstCatTh.style.left = cumulLeft + 'px';
+            // 平台名跨 colSpan=subCount 列，冻结区最右侧画竖分隔阴影（跟 subs 行冻结区最后一列一致，视觉上两层平台名+子项都有冻结区右边界）
+            firstCatTh.classList.add('frozen-last-col');
           }
         }
 
