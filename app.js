@@ -814,21 +814,11 @@
     //       firstParentIdx/ColSpanInMixedRow：若 parents 行是 mixed，计算 firstCat 所属 group 在 th 列表里的索引（groups 遍历）
     //   (2) 每个冻结单元格加上 data-row=theRowIdx + data-col=theColIdx，CSS 按 data-row 精确指定吸顶 top（不再用回退），杜绝子项在竖滚时吸顶高度与平台名不一致（导致视觉分离）。
     function applyFreezeFirstPlatform() {
+      // 2026-08-08 用户最终选择：取消第一平台及其子项的"向左冻结(sticky left)"，只保留表头竖向吸顶。
+      // 这里保留函数签名 & 调用链，仅做"清除上次冻结残留"防止刷新/切配置后遗留旧类，后续冻结步骤全部跳过。
+      // 表头竖滚吸顶由 thead tr 的 position:sticky + --thead-rN-top CSS 变量提供，不依赖本函数。
       try {
-        const tableEl = document.getElementById('status-table') || document.querySelector('.status-table');
-        const colgroup = tableEl ? tableEl.querySelector('colgroup#status-colgroup') : null;
-        if (!colgroup) return;
-        const cols = Array.from(colgroup.querySelectorAll('col'));
-        function colWidthAt(i) { return cols[i] ? (parseFloat(cols[i].style.width) || cols[i].offsetWidth || 0) : 0; }
-        if (orderedCats.length === 0) return;
-        const hourW = colWidthAt(0);
-        const firstCat = orderedCats[0];
-        const subCount = (firstCat.subStatuses && firstCat.subStatuses.length > 0) ? firstCat.subStatuses.length : 1;
-        const headEl = document.getElementById('table-head');
-        if (!headEl) return;
-        const rows = Array.from(headEl.querySelectorAll('tr'));
-
-        // ========= 清除上次冻结残留 =========
+        // ========= 清除上次冻结残留（若之前旧版本留下 sticky 类/left 样式，一次性清理干净，防止出现半冻结状态） =========
         function clearFrozen(el) {
           if (!el) return;
           el.classList.remove('sticky-platform-header', 'sticky-sub-header', 'frozen-last-col');
@@ -839,7 +829,10 @@
           if (el.style) { el.style.left = ''; }
         }
         try {
-          Array.from(headEl.querySelectorAll('th.sticky-platform-header, th.sticky-sub-header')).forEach(clearFrozen);
+          const headEl = document.getElementById('table-head');
+          if (headEl) {
+            Array.from(headEl.querySelectorAll('th.sticky-platform-header, th.sticky-sub-header')).forEach(clearFrozen);
+          }
           const bodyEl = document.getElementById('table-body');
           if (bodyEl) {
             Array.from(bodyEl.querySelectorAll('td.sticky-platform-td, td.sticky-sub-td')).forEach(td => {
@@ -850,123 +843,6 @@
             });
           }
         } catch (e) {}
-
-        // ========= 精确计算起点索引 =========
-        // firstCatConcreteStart：在 allConcreteColKeys（hour + 所有子项列 + note + time）中，firstCat 第 1 个子列的 index
-        let firstCatConcreteStart = 1; // 至少 1（hour=0）
-        for (let i = 0; i < orderedCats.length; i++) {
-          const c = orderedCats[i];
-          if (c.id === firstCat.id) break;
-          const sc = (c.subStatuses && c.subStatuses.length > 0) ? c.subStatuses.length : 1;
-          firstCatConcreteStart += sc;
-        }
-        // firstCatInSubsRowStart：在 subs row（独立 row 纯 subs 不含 hour/note/time）中，firstCat 子项的 th 起点
-        let firstCatInSubsRowStart = 0;
-        for (let i = 0; i < orderedCats.length; i++) {
-          const c = orderedCats[i];
-          if (c.id === firstCat.id) break;
-          const sc = (c.subStatuses && c.subStatuses.length > 0) ? c.subStatuses.length : 1;
-          firstCatInSubsRowStart += sc;
-        }
-        // firstGroupIdxInMixedRow / firstGroupColSpan：在 parents mixed row（row0）中，firstCat 所属 group 的 th 索引 & colSpan
-        let firstGroupIdxInMixedRow = -1;
-        let firstGroupColSpan = 0;
-        if (hasParents && groups.length > 0) {
-          let acc = 1; // th[0]=hour-cell
-          for (let gi = 0; gi < groups.length; gi++) {
-            const g = groups[gi];
-            const isCatInGroup = g.cats.some(c => c.id === firstCat.id);
-            if (isCatInGroup) {
-              firstGroupIdxInMixedRow = gi < 0 ? 1 : acc; // 实际上 gi 到达时 acc 已经 = th 索引（因为前面的 group 每个占 1 th 就加 1）→ 不对：每一个 group 在 parents row 对应一个 th，所以 parent th 的索引 = 1 + gi
-              firstGroupIdxInMixedRow = 1 + gi;
-              firstGroupColSpan = groupColCount(g);
-              break;
-            }
-            acc++; // 每一个 group 占一个 parent th
-          }
-        }
-        // firstCatInCatMixedRowStart：若 categories 行是 mixed row（hasParents=false 时 row0 是混合行：hour[0] + cats[1..n] + note[last-1] + time[last]）
-        //   那么 firstCat 的 th 索引 = 1 + Σ(orderedCats 之前的 cat)每一个 cat = 1 个 th（不管 colSpan 多少，每个 cat 占 1 th）
-        let firstCatInCatMixedRowIdx = -1;
-        if (!hasParents) {
-          let idx = 1; // th[0]=hour
-          for (let i = 0; i < orderedCats.length; i++) {
-            if (orderedCats[i].id === firstCat.id) { firstCatInCatMixedRowIdx = idx; break; }
-            idx++;
-          }
-        } else {
-          // hasParents=true 时 row1 是纯 cats（独立 row，每个 cat 占 1 th），firstCat th 索引 = orderedCats 的 index
-          firstCatInCatMixedRowIdx = 0;
-        }
-
-        // ========= 算 subs 的累积 left 数组（每一个子项 th/td 自己的 left 值）=========
-        const cumulLeft = hourW;
-        const subLefts = [];
-        for (let k = 0; k < subCount; k++) {
-          let left = cumulLeft;
-          for (let j = 0; j < k; j++) left += colWidthAt(firstCatConcreteStart + j);
-          subLefts.push(left);
-        }
-
-        // ========= row 索引 =========
-        const catRowIdx = hasParents ? 1 : 0;
-        const subRowIdx = hasSubs ? (hasParents ? 2 : 1) : -1;
-
-        // ========= 1) categories row：冻结 firstCat 平台名 th（注意：不冻结检查组名 parents row，避免跨列太大盖住后面滚动列；用户反馈只需要第一平台 + 子项类比时间列常显） =========
-        const catRow = rows[catRowIdx];
-        if (catRow) {
-          const catThs = Array.from(catRow.querySelectorAll('th'));
-          const firstCatTh = catThs[firstCatInCatMixedRowIdx];
-          if (firstCatTh) {
-            clearFrozen(firstCatTh);
-            firstCatTh.classList.add('sticky-platform-header');
-            firstCatTh.setAttribute('data-frozen', '1');
-            firstCatTh.setAttribute('data-row', String(catRowIdx));
-            firstCatTh.setAttribute('data-col', String(firstCatInCatMixedRowIdx));
-            firstCatTh.setAttribute('data-left', cumulLeft.toFixed(1));
-            firstCatTh.style.left = cumulLeft + 'px';
-            // 平台名跨 colSpan=subCount 列，冻结区最右侧画竖分隔阴影（跟 subs 行冻结区最后一列一致，视觉上两层平台名+子项都有冻结区右边界）
-            firstCatTh.classList.add('frozen-last-col');
-          }
-        }
-
-        // ========= 3) subs row：冻结 firstCat 下 subCount 个子 th（如果有 subs） =========
-        if (subRowIdx >= 0) {
-          const subRow = rows[subRowIdx];
-          if (subRow) {
-            const subThs = Array.from(subRow.querySelectorAll('th'));
-            for (let k = 0; k < subCount; k++) {
-              const subTh = subThs[firstCatInSubsRowStart + k];
-              if (!subTh) continue;
-              clearFrozen(subTh);
-              subTh.classList.add('sticky-sub-header');
-              subTh.setAttribute('data-frozen', '1');
-              subTh.setAttribute('data-row', String(subRowIdx));
-              subTh.setAttribute('data-col', String(firstCatInSubsRowStart + k));
-              subTh.setAttribute('data-left', subLefts[k].toFixed(1));
-              subTh.style.left = subLefts[k] + 'px';
-              // 子项最后一列 → 冻结区最右侧：画一个竖分隔阴影
-              if (k === subCount - 1) subTh.classList.add('frozen-last-col');
-            }
-          }
-        }
-
-        // ========= 4) tbody：每一行 firstCat 的 subCount 个对应 td（索引 = firstCatConcreteStart..firstCatConcreteStart+subCount-1） =========
-        const bodyEl = document.getElementById('table-body');
-        if (bodyEl) {
-          Array.from(bodyEl.querySelectorAll('tr')).forEach(bodyTr => {
-            const tds = Array.from(bodyTr.querySelectorAll('td'));
-            for (let k = 0; k < subCount; k++) {
-              const td = tds[firstCatConcreteStart + k];
-              if (!td) continue;
-              td.classList.add(subCount > 1 ? 'sticky-sub-td' : 'sticky-platform-td');
-              td.setAttribute('data-frozen', '1');
-              td.setAttribute('data-left', subLefts[k].toFixed(1));
-              td.style.left = subLefts[k] + 'px';
-              if (k === subCount - 1) td.classList.add('frozen-last-col');
-            }
-          });
-        }
       } catch (e) {}
     }
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
