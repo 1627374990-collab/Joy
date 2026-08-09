@@ -231,20 +231,20 @@
     return s === getGMTDateString(d);
   }
 
-  // 从历史界面跳转过来时读取目标日期（sessionStorage 优先），或兼容 URL ?date=YYYY-MM-DD
+  // 从历史界面跳转过来时读取目标日期（优先 URL ?date=，再 sessionStorage history_target_date）。
+  // 之前一次性消费 sessionStorage 的策略容易因为 pageshow/visibilitychange/刷新导致日期丢失，
+  // 改为：URL ?date= 一直保留在地址栏（刷新不丢）；sessionStorage 命中时把日期再同步到 URL，双保险。
   function resolveInitialDate() {
-    try {
-      const fromStorage = window.sessionStorage.getItem('history_target_date');
-      if (isValidDateString(fromStorage)) {
-        // 只在首次进入使用一次，下一次刷新回今天（避免用户停留在错误日期）
-        try { window.sessionStorage.removeItem('history_target_date'); } catch (e) {}
-        return { date: fromStorage, fromHistory: true };
-      }
-    } catch (e) {}
     try {
       const url = new URL(window.location.href);
       const q = url.searchParams.get('date');
-      if (isValidDateString(q)) return { date: q, fromHistory: false };
+      if (isValidDateString(q)) return { date: q, fromHistory: true };
+    } catch (e) {}
+    try {
+      const fromStorage = window.sessionStorage.getItem('history_target_date');
+      if (isValidDateString(fromStorage)) {
+        return { date: fromStorage, fromHistory: true, persistToUrl: true };
+      }
     } catch (e) {}
     return { date: getTodayDate(), fromHistory: false };
   }
@@ -1964,11 +1964,15 @@ ${css.styleTag}
   // ===== Init =====
   // Central reload: idempotently re-read settings/cats/records from storage,
   // apply to DOM, and re-render. Called from init(), pageshow, visibilitychange.
-  function reloadAllAndRender(reason) {
+  // 注意：默认不覆盖 currentDate（preserveCurrentDate=true），防止"从历史跳转目标日期后，pageshow 又把它改回今天"。
+  // 只有当确实想回到今天（例如点击 current-date 文案）时才传 false。
+  function reloadAllAndRender(reason, preserveCurrentDate = true) {
     settings = loadSettings();
     categories = loadCategories();
     records = loadRecords();
-    currentDate = getGMTDateString(getNow());
+    if (preserveCurrentDate !== true) {
+      currentDate = getGMTDateString(getNow());
+    }
     applySettingsToDOM();
     renderAll(true);
     refreshTheadStickyOffset();
@@ -2017,27 +2021,45 @@ ${css.styleTag}
   }
 
   function init() {
-    // 优先：从历史界面跳转带过来的目标日期；再兼容 URL ?date=YYYY-MM-DD；否则默认今天
-    const init = resolveInitialDate();
-    currentDate = init.date;
-    initialDateFromHistory = !!init.fromHistory;
+    // 优先：URL ?date=YYYY-MM-DD；其次 sessionStorage.history_target_date；最后 fallback 今天
+    const initInfo = resolveInitialDate();
+    currentDate = initInfo.date;
+    initialDateFromHistory = !!initInfo.fromHistory;
+
+    // If resolved via sessionStorage (old path or iOS), mirror to URL ?date= so survives refresh/pageshow
+    if (initialDateFromHistory && initInfo && initInfo.persistToUrl === true) {
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.set('date', currentDate);
+        window.history.replaceState(null, '', u.toString());
+      } catch (e) {}
+    }
 
     // Apply all settings to DOM (font size, highlight color, one-click label, one-click preset state)
     applySettingsToDOM();
 
-    // Date is always today in GMT mode - but when editing a past date (from history jump)
-    // clicking the date label jumps back to TODAY so users can return quickly.
+    // Clicking the date label jumps back to TODAY (and clears any ?date= from the URL so next load defaults today)
     document.getElementById('current-date').addEventListener('click', () => {
       currentDate = getTodayDate();
+      try {
+        const u = new URL(window.location.href);
+        if (u.searchParams.get('date')) {
+          u.searchParams.delete('date');
+          window.history.replaceState(null, '', u.toString());
+        }
+      } catch (e) {}
+      initialDateFromHistory = false;
+      // Remove back-to-history quick button if present
+      const bk = document.getElementById('btn-back-history');
+      if (bk && bk.parentNode) bk.parentNode.removeChild(bk);
       renderAll(true);
       scheduleRefreshStickyOffset();
     });
 
-    // If we arrived here from history view, add a one-time "返回历史" quick button
-    // and banner notice (inform user "you are editing YYYY-MM-DD, save then go back").
-    if (initialDateFromHistory) {
+    // If we arrived here editing a non-today date (from history or via ?date=), add "↩ 返回历史"
+    // quick button + blue info banner (only render once - skip if banner is in real reminder state).
+    if (initialDateFromHistory && currentDate !== getTodayDate()) {
       try {
-        // Insert small "↩ 返回历史" button before one-click button
         const actions = document.querySelector('.quick-actions');
         if (actions && !document.getElementById('btn-back-history')) {
           const backBtn = document.createElement('button');
@@ -2050,13 +2072,11 @@ ${css.styleTag}
           });
           actions.insertBefore(backBtn, actions.firstChild);
         }
-        // Reuse reminder banner for a one-time info notice (but it's not a reminder)
         const banner = document.getElementById('reminder-banner');
         if (banner) {
-          const originalText = banner.querySelector('#reminder-text');
-          // Make a safer, dedicated info banner
+          const text = banner.querySelector('#reminder-text');
           banner.classList.remove('hidden');
-          if (originalText) originalText.textContent = `📌 已从历史记录打开 ${currentDate}，可直接在主界面修改；点「返回历史」或「📅」可回到历史列表。`;
+          if (text) text.textContent = `📌 正在查看/编辑 ${currentDate} 的记录（由历史记录跳转而来），修改后点「返回历史」或顶部「📅」回列表。`;
           banner.style.background = '#e3f2fd';
           banner.style.color = '#0d47a1';
           banner.style.border = '1px solid #bbdefb';

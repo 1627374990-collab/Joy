@@ -287,7 +287,7 @@
   }
 
   // 历史界面「查看详情」改为跳转到主界面编辑当天记录（直接编辑而非只读模态）。
-  // 用 sessionStorage 跨页带目标日期，主界面 app.js 在 init 里读取后切换 currentDate 并渲染，可直接修改保存。
+  // 跨页传参双保险：① URL ?date=YYYY-MM-DD（主路径，刷新也不丢）② sessionStorage（兼容 iOS/PWA 后台切换）。
   function showDayDetail(date) {
     if (!date) return;
     try {
@@ -295,7 +295,9 @@
     } catch (e) {}
     // 同步保存用户当前修改，防止 PWA 回跳时未保存的状态丢失
     try { saveRecordsSync(); saveSettingsSync(); } catch (e) {}
-    window.location.href = 'index.html';
+    const url = new URL('index.html', window.location.href);
+    url.searchParams.set('date', date);
+    window.location.href = url.toString();
   }
 
   // ===== PDF Export =====
