@@ -223,6 +223,34 @@
     return getGMTDateString(getNow());
   }
 
+  function isValidDateString(s) {
+    if (typeof s !== 'string') return false;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const d = new Date(s + 'T00:00:00Z');
+    if (isNaN(d.getTime())) return false;
+    return s === getGMTDateString(d);
+  }
+
+  // 从历史界面跳转过来时读取目标日期（sessionStorage 优先），或兼容 URL ?date=YYYY-MM-DD
+  function resolveInitialDate() {
+    try {
+      const fromStorage = window.sessionStorage.getItem('history_target_date');
+      if (isValidDateString(fromStorage)) {
+        // 只在首次进入使用一次，下一次刷新回今天（避免用户停留在错误日期）
+        try { window.sessionStorage.removeItem('history_target_date'); } catch (e) {}
+        return { date: fromStorage, fromHistory: true };
+      }
+    } catch (e) {}
+    try {
+      const url = new URL(window.location.href);
+      const q = url.searchParams.get('date');
+      if (isValidDateString(q)) return { date: q, fromHistory: false };
+    } catch (e) {}
+    return { date: getTodayDate(), fromHistory: false };
+  }
+
+  let initialDateFromHistory = false; // init 内设置，renderHeader / banner 会用到
+
   // ===== Storage =====
   // scheduleIdle 兼容垫片：优先 requestIdleCallback（iOS 16+ 支持），其次 rAF + 延时
   function _scheduleIdle(fn, timeoutMs) {
@@ -440,7 +468,12 @@
 
   function renderHeader() {
     const dateEl = document.getElementById('current-date');
-    dateEl.textContent = '今日记录 (GMT)';
+    const today = getTodayDate();
+    if (currentDate === today) {
+      dateEl.textContent = '今日记录 (GMT)';
+    } else {
+      dateEl.textContent = `历史编辑: ${currentDate} (GMT)`;
+    }
     const fullDate = getFullDateString(currentDate);
     document.getElementById('date-full').textContent = fullDate;
     document.title = `SCC Patrol Record · ${currentDate}`;
@@ -1984,18 +2017,52 @@ ${css.styleTag}
   }
 
   function init() {
-    // Always use today's date
-    currentDate = getTodayDate();
+    // 优先：从历史界面跳转带过来的目标日期；再兼容 URL ?date=YYYY-MM-DD；否则默认今天
+    const init = resolveInitialDate();
+    currentDate = init.date;
+    initialDateFromHistory = !!init.fromHistory;
 
     // Apply all settings to DOM (font size, highlight color, one-click label, one-click preset state)
     applySettingsToDOM();
 
-    // Date is always today in GMT mode
+    // Date is always today in GMT mode - but when editing a past date (from history jump)
+    // clicking the date label jumps back to TODAY so users can return quickly.
     document.getElementById('current-date').addEventListener('click', () => {
       currentDate = getTodayDate();
       renderAll(true);
       scheduleRefreshStickyOffset();
     });
+
+    // If we arrived here from history view, add a one-time "返回历史" quick button
+    // and banner notice (inform user "you are editing YYYY-MM-DD, save then go back").
+    if (initialDateFromHistory) {
+      try {
+        // Insert small "↩ 返回历史" button before one-click button
+        const actions = document.querySelector('.quick-actions');
+        if (actions && !document.getElementById('btn-back-history')) {
+          const backBtn = document.createElement('button');
+          backBtn.id = 'btn-back-history';
+          backBtn.className = 'btn btn-outline';
+          backBtn.innerHTML = '<span class="btn-icon">↩</span><span>返回历史</span>';
+          backBtn.addEventListener('click', () => {
+            try { saveRecordsSync(); saveSettingsSync(); } catch (e) {}
+            window.location.href = 'history.html';
+          });
+          actions.insertBefore(backBtn, actions.firstChild);
+        }
+        // Reuse reminder banner for a one-time info notice (but it's not a reminder)
+        const banner = document.getElementById('reminder-banner');
+        if (banner) {
+          const originalText = banner.querySelector('#reminder-text');
+          // Make a safer, dedicated info banner
+          banner.classList.remove('hidden');
+          if (originalText) originalText.textContent = `📌 已从历史记录打开 ${currentDate}，可直接在主界面修改；点「返回历史」或「📅」可回到历史列表。`;
+          banner.style.background = '#e3f2fd';
+          banner.style.color = '#0d47a1';
+          banner.style.border = '1px solid #bbdefb';
+        }
+      } catch (e) {}
+    }
 
     // Buttons
     document.getElementById('btn-one-click').addEventListener('click', oneClickCurrentHour);

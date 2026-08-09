@@ -286,117 +286,16 @@
     });
   }
 
+  // 历史界面「查看详情」改为跳转到主界面编辑当天记录（直接编辑而非只读模态）。
+  // 用 sessionStorage 跨页带目标日期，主界面 app.js 在 init 里读取后切换 currentDate 并渲染，可直接修改保存。
   function showDayDetail(date) {
-    const data = collectDateData(date);
-    const existing = document.getElementById('detail-overlay');
-    if (existing) existing.remove();
-
-    const overlay = document.createElement('div');
-    overlay.id = 'detail-overlay';
-    overlay.className = 'dialog-overlay';
-    overlay.innerHTML = `
-      <div class="dialog detail-dialog">
-        <h3>${getFullDateLabel(date)} 详情</h3>
-        <div class="detail-table-wrapper">
-          <table class="status-table detail-table">
-            <thead><tr id="detail-head"></tr></thead>
-            <tbody id="detail-body"></tbody>
-          </table>
-        </div>
-        <div class="dialog-actions">
-          <button class="btn btn-secondary" id="detail-close">关闭</button>
-          <button class="btn btn-primary" id="detail-pdf">导出PDF</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-
-    // Build table
-    const head = overlay.querySelector('#detail-head');
-    const body = overlay.querySelector('#detail-body');
-
-    const thH = document.createElement('th');
-    thH.className = 'hour-cell';
-    thH.textContent = '时间';
-    head.appendChild(thH);
-
-    categories.forEach(cat => {
-      const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
-      subs.forEach(sub => {
-        const th = document.createElement('th');
-        th.textContent = sub.name;
-        th.style.fontSize = '10px';
-        head.appendChild(th);
-      });
-    });
-
-    const thN = document.createElement('th');
-    thN.textContent = '备注';
-    thN.className = 'note-cell';
-    head.appendChild(thN);
-
-    const thT = document.createElement('th');
-    thT.textContent = '填入';
-    thT.className = 'time-cell';
-    head.appendChild(thT);
-
-    data.forEach(row => {
-      const tr = document.createElement('tr');
-
-      const tdH = document.createElement('td');
-      tdH.className = 'hour-cell';
-      tdH.textContent = `${row.hour}:00`;
-      tr.appendChild(tdH);
-
-      categories.forEach(cat => {
-        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
-        subs.forEach(sub => {
-          const td = document.createElement('td');
-          const ed = row.entries[cat.id] ? row.entries[cat.id][sub.id] : null;
-          td.textContent = ed ? ed.status : '';
-          if (ed && ed.status === STATUS_CHECKED) td.style.color = '#2e7d32';
-          if (ed && ed.status === STATUS_CROSSED) td.style.color = '#c62828';
-          td.style.textAlign = 'center';
-          td.style.fontSize = '14px';
-          td.style.fontWeight = 'bold';
-          tr.appendChild(td);
-        });
-      });
-
-      const tdN = document.createElement('td');
-      tdN.className = 'note-cell';
-      tdN.textContent = row.note || '';
-      tdN.style.fontSize = '11px';
-      tr.appendChild(tdN);
-
-      const tdT = document.createElement('td');
-      tdT.className = 'time-cell';
-      let latest = null;
-      categories.forEach(cat => {
-        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
-        subs.forEach(sub => {
-          const ed = row.entries[cat.id] ? row.entries[cat.id][sub.id] : null;
-          if (ed && ed.timestamp && (!latest || ed.timestamp > latest)) latest = ed.timestamp;
-        });
-      });
-      if (row.noteTimestamp && (!latest || row.noteTimestamp > latest)) latest = row.noteTimestamp;
-      tdT.textContent = latest ? getTimestampString(latest) : '';
-      tdT.style.fontSize = '10px';
-      tr.appendChild(tdT);
-
-      body.appendChild(tr);
-    });
-
-    overlay.style.display = 'flex';
-
-    overlay.querySelector('#detail-close').addEventListener('click', () => overlay.remove());
-    overlay.querySelector('#detail-pdf').addEventListener('click', () => {
-      overlay.remove();
-      exportSingleDay(date);
-    });
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.remove();
-    });
+    if (!date) return;
+    try {
+      window.sessionStorage.setItem('history_target_date', date);
+    } catch (e) {}
+    // 同步保存用户当前修改，防止 PWA 回跳时未保存的状态丢失
+    try { saveRecordsSync(); saveSettingsSync(); } catch (e) {}
+    window.location.href = 'index.html';
   }
 
   // ===== PDF Export =====
