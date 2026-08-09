@@ -1131,8 +1131,8 @@
     let placeholder;
     if (access === 'future') placeholder = '未到时间';
     else if (unlocked) placeholder = 'Note...';
-    else if (hasExistingNote) placeholder = '🔒 已有备注：先点「修改」解锁后再编辑';
-    else placeholder = '（可直接新增备注；超时填入会自动高亮）';
+    else if (hasExistingNote) placeholder = '';
+    else placeholder = '';
     textarea.placeholder = placeholder;
     textarea.value = meta.note || '';
     textarea.dataset.hour = hour;
@@ -1144,7 +1144,6 @@
       // 空备注（还没填过）→ 即使未解锁也允许直接写（对应"平常也能新增记录"）
       textarea.disabled = true;
       textarea.classList.add('note-row-locked');
-      textarea.title = '🔒 已有备注：请先点右侧「修改」键解锁该行后再编辑';
     }
     // 过时未填空白 → 不再给 cell-grace 视觉样式（保持表格原样）；只有真正 noteTimestamp 在容差外的才会高亮(见 updateNoteHighlight)
     textarea.addEventListener('input', _debounce((e) => {
