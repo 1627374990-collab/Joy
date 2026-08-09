@@ -1261,16 +1261,34 @@ ${css.styleTag}
     // ===== 一键导出习惯：相对日期选择（上上周一 ~ 今天）=====
     initQuickExportHabit();
 
-    // Clear All History
+    // Clear History — scope = 当前「查询起止日期」范围（用户在 date-start / date-end 之间选中的日期窗口，仅清除窗口内，窗口外保留）
     document.getElementById('btn-clear-history').addEventListener('click', () => {
-      showDialog('清除全部历史', '确定要清除所有日期的SCC Patrol Record 数据吗？此操作不可恢复！类别设置将保留。', () => {
-        showDialog('再次确认', '⚠️ 最后确认：将永久删除所有历史记录数据，确定继续？', () => {
-          records = {};
-          saveRecords();
-          showSnackbar('✅ 所有历史记录已清除');
-          setTimeout(() => window.location.reload(), 800);
+      const start = document.getElementById('date-start').value;
+      const end = document.getElementById('date-end').value;
+      if (!start || !end) { showSnackbar('请先选择起止日期再执行清除'); return; }
+      if (start > end) { showSnackbar('起始日期不能晚于结束日期'); return; }
+      showDialog(
+        `清除 ${start} ~ ${end} 的历史`,
+        `确定要清除 ${start} 至 ${end}（含）的所有 SCC Patrol Record 数据吗？仅清除这个日期范围内的记录，其它日期数据完全保留；此操作不可恢复！类别设置将保留。`,
+        () => {
+          showDialog(
+            '再次确认',
+            `⚠️ 最后确认：永久删除 ${start} 到 ${end} 的历史记录，范围外的日期保留。确定继续？`,
+            () => {
+              let removedCount = 0;
+              const dates = Object.keys(records || {});
+              dates.forEach(d => {
+                if (d && d >= start && d <= end) {
+                  delete records[d];
+                  removedCount += 1;
+                }
+              });
+              saveRecords();
+              showSnackbar(`✅ 已清除 ${removedCount} 天的记录（范围: ${start} ~ ${end}）`);
+              // 直接重绘当前范围，不 reload 整页（避免查询条件 / 习惯选项 / 一键导出下拉状态丢失）
+              try { renderHistoryList(start, end); } catch (e) { window.location.reload(); }
+            });
         });
-      });
     });
 
     // Auto-load initial range

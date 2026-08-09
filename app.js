@@ -223,12 +223,128 @@
     return getGMTDateString(getNow());
   }
 
+  function shiftDate(dateStr, days) {
+    const d = new Date(dateStr + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + days);
+    return getGMTDateString(d);
+  }
+
   function isValidDateString(s) {
     if (typeof s !== 'string') return false;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
     const d = new Date(s + 'T00:00:00Z');
     if (isNaN(d.getTime())) return false;
     return s === getGMTDateString(d);
+  }
+
+  // rel:xxx -> Date (GMT 0:0:0)
+  function resolveRelativeKeyToDate(relKey, refNow) {
+    const now = refNow || getNow();
+    if (!relKey || typeof relKey !== 'string' || !relKey.startsWith('rel:')) return null;
+    const key = relKey.slice(4);
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    if (key === 'today') return today;
+    const parts = key.split('_');
+    let weekOffset = 0;
+    let dowName = null;
+    if (parts[0] === 'this' && parts[1] === 'week') { weekOffset = 0; dowName = parts[2]; }
+    else if (parts[0] === 'last' && parts[1] === 'week') { weekOffset = -1; dowName = parts[2]; }
+    else if (parts[0] === 'two' && parts[1] === 'weeks' && parts[2] === 'ago') { weekOffset = -2; dowName = parts[3]; }
+    if (!dowName) return null;
+    const dowMap = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 0 };
+    const dow = dowMap[dowName];
+    if (dow === undefined) return null;
+    const dayOfWeekToday = today.getUTCDay();
+    const mondayOffset = -((dayOfWeekToday + 6) % 7);
+    const targetMonday = new Date(today);
+    targetMonday.setUTCDate(today.getUTCDate() + mondayOffset + weekOffset * 7);
+    const extraDays = dow === 0 ? 6 : (dow - 1);
+    const res = new Date(targetMonday);
+    res.setUTCDate(targetMonday.getUTCDate() + extraDays);
+    return res;
+  }
+
+  function buildRelativeDateOptions(refNow) {
+    const now = refNow || getNow();
+    const dayOfWeek = now.getUTCDay();
+    const mondayThisWeek = new Date(now);
+    mondayThisWeek.setUTCDate(now.getUTCDate() - ((dayOfWeek + 6) % 7));
+    mondayThisWeek.setUTCHours(0, 0, 0, 0);
+    const earliest = new Date(mondayThisWeek);
+    earliest.setUTCDate(mondayThisWeek.getUTCDate() - 14);
+    const weekdayNames = ['一', '二', '三', '四', '五', '六', '日'];
+    const weekdayKeys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const options = [];
+    const todayStr = getGMTDateString(now);
+    let d = new Date(earliest);
+    while (d <= now) {
+      const dateStr = getGMTDateString(d);
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const dow = d.getUTCDay();
+      const dowIdx = (dow + 6) % 7;
+      const dayName = weekdayNames[dowIdx];
+      const diffDays = Math.round((d - mondayThisWeek) / (24 * 60 * 60 * 1000));
+      let prefix, relWeekPrefix;
+      if (dateStr === todayStr) { prefix = '今天'; relWeekPrefix = 'today'; }
+      else if (diffDays >= 0) { prefix = '本周'; relWeekPrefix = 'this_week'; }
+      else if (diffDays >= -7) { prefix = '上周'; relWeekPrefix = 'last_week'; }
+      else { prefix = '上上周'; relWeekPrefix = 'two_weeks_ago'; }
+      const relKey = prefix === '今天' ? 'rel:today' : `rel:${relWeekPrefix}_${weekdayKeys[dowIdx]}`;
+      const label = `${prefix}${dayName} (${mm}-${dd})`;
+      options.push({ value: dateStr, label, relKey });
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return options;
+  }
+
+  function resolveHabitToOptionValue(habit, options, fallbackValue, refNow) {
+    if (!habit) return fallbackValue;
+    if (typeof habit === 'string' && habit.startsWith('rel:')) {
+      const realDate = resolveRelativeKeyToDate(habit, refNow || getNow());
+      if (realDate) {
+        const ds = getGMTDateString(realDate);
+        if (options.some(o => o.value === ds)) return ds;
+      }
+      return fallbackValue;
+    }
+    if (typeof habit === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(habit)) {
+      if (options.some(o => o.value === habit)) return habit;
+    }
+    return fallbackValue;
+  }
+
+  function habitFromOptionValue(val, options) {
+    const opt = options.find(o => o.value === val);
+    if (opt && opt.relKey) return opt.relKey;
+    return val;
+  }
+
+  // 解析设置里保存的 quickExportStart/End（可能是 rel:xxx 或绝对日期），
+  // 返回 { start:'YYYY-MM-DD' 或 null, end:'YYYY-MM-DD' 或 null }。
+  // 主页面「一键导出PDF」按钮需要用这个来按「习惯」导出对应范围，而不是当前页面 single day。
+  function resolveQuickExportRange() {
+    try {
+      const now = getNow();
+      const options = buildRelativeDateOptions(now);
+      if (options.length === 0) return { start: null, end: null };
+      const dayOfWeek = now.getUTCDay();
+      const mondayThisWeek = new Date(now);
+      mondayThisWeek.setUTCDate(now.getUTCDate() - ((dayOfWeek + 6) % 7));
+      const lastTue = new Date(mondayThisWeek);
+      lastTue.setUTCDate(mondayThisWeek.getUTCDate() - 6);
+      const thisWed = new Date(mondayThisWeek);
+      thisWed.setUTCDate(mondayThisWeek.getUTCDate() + 2);
+      const todayDate = new Date(now);
+      todayDate.setUTCHours(0, 0, 0, 0);
+      const defaultStart = getGMTDateString(lastTue);
+      const defaultEnd = thisWed <= todayDate ? getGMTDateString(thisWed) : getGMTDateString(now);
+      const start = resolveHabitToOptionValue(settings.quickExportStart, options, defaultStart, now);
+      const end = resolveHabitToOptionValue(settings.quickExportEnd, options, defaultEnd, now);
+      return { start, end };
+    } catch (e) {
+      return { start: null, end: null };
+    }
   }
 
   // 从历史界面跳转过来时读取目标日期（优先 URL ?date=，再 sessionStorage history_target_date）。
@@ -1230,16 +1346,21 @@
 
   // ===== PDF Export (uses quick-export habit) =====
   async function exportPDF() {
-    const start = settings.quickExportStart;
-    const end = settings.quickExportEnd;
+    const range = resolveQuickExportRange();
+    const start = range && range.start;
+    const end = range && range.end;
     if (start && end && start <= end) {
-      showSnackbar(`正在导出: ${start} 至 ${end}`);
+      const startLabel = start;
+      const endLabel = end;
+      showSnackbar(`正在导出习惯范围: ${startLabel} 至 ${endLabel}`);
       setTimeout(() => exportRangeAsPDF(start, end), 100);
       return;
     }
-    showSnackbar('正在生成 PDF...');
+    // fallback：没有设置习惯 / 范围不合法 → 导出主界面当前显示的那一天
+    const fallbackDate = currentDate || getTodayDate();
+    showSnackbar('正在生成 PDF...（' + fallbackDate + '）');
     try {
-      await exportRangeViaCanvasPDF([currentDate]);
+      await exportRangeViaCanvasPDF([fallbackDate]);
     } catch (err) {
       console.error(err);
       showSnackbar('导出失败: ' + (err && err.message ? err.message : err));
