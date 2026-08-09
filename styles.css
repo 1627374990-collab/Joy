@@ -627,7 +627,7 @@ tbody tr.row-locked {
   border-left: 3px solid transparent;
 }
 
-/* 修改键 column header + body td */
+/* 修改键 column header + body td — 取消 sticky 常显，就放在最右边跟后面数据列一起横滚 */
 .status-table th.edit-header,
 .status-table td.edit-cell {
   text-align: center;
@@ -635,11 +635,6 @@ tbody tr.row-locked {
   padding: 0;
   background: #fafafa;
   border-left: 1px solid #e0e0e0;
-  position: sticky;
-  right: 0; /* 横向滚动时，修改键也像时间列一样常显，随时能解锁当前可见行 */
-  z-index: 3; /* 在数据列之上，但低于 hour-cell(z4) 保持层级正确 */
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
 }
 .status-table th.edit-header {
   font-size: 12px;

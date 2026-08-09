@@ -1208,6 +1208,8 @@
   // ===== Interactions =====
   function handleCellClick(td, date, hour, categoryId, subId) {
     const access = getHourAccessState(date, hour);
+    // 只要用户解锁进入本行修改态，即使 grace-fill(过了容差时间) 也允许修改已填/空白（等同于 editable）
+    const forceEditable = _isRowUnlocked(hour);
 
     if (access === 'future') {
       showSnackbar(`${hour}:00 还未到，不能填入`);
@@ -1217,8 +1219,8 @@
     const entry = getEntry(date, hour, categoryId, subId);
     const hadContent = entry.status !== STATUS_EMPTY;
 
-    if (access === 'grace-fill') {
-      // 过了容差窗口：只允许填入空单元格（不能改写已有的）
+    if (access === 'grace-fill' && !forceEditable) {
+      // 未解锁：过了容差窗口，只允许填入空单元格（不能改写已有的）
       if (hadContent) {
         showSnackbar(`${hour}:00 已过容差时间，不可修改已填内容`);
         return;
@@ -1236,15 +1238,18 @@
       return;
     }
 
-    // access === 'editable' (容差内)：正常修改
-    // 但如果之前已经填过，切换时提示"覆盖"
+    // 到这里：access === 'editable' （容差内） 或 已解锁(forceEditable=true) 即使 grace-fill
+    // → 统一正常修改：已填修改需覆盖确认、空单元格正常填入、修改后刷 timestamp
     if (hadContent) {
       const willCycle = entry.status === STATUS_CROSSED && (nextStatus(entry.status) === STATUS_EMPTY);
       const willOverwrite = (entry.status === STATUS_CHECKED || entry.status === STATUS_CROSSED)
         && nextStatus(entry.status) !== STATUS_EMPTY;
       if (willOverwrite || willCycle) {
+        const extraInfo = (access === 'grace-fill' && forceEditable)
+          ? `（已解锁：允许在容差时间外修改）`
+          : '';
         // 非空→非空 或 非空→清空：给用户确认
-        showDialog('覆盖确认', `${hour}:00 该时段已有打卡记录，确认${willCycle ? '清空' : '修改'}该记录吗？`, () => {
+        showDialog('覆盖确认', `${hour}:00 该时段已有打卡记录，确认${willCycle ? '清空' : '修改'}该记录吗？${extraInfo}`, () => {
           entry.status = nextStatus(entry.status);
           entry.timestamp = entry.status === STATUS_EMPTY ? null : getNow().getTime();
           saveRecords();
@@ -1279,6 +1284,7 @@
 
   function saveNote(date, hour, value) {
     const access = getHourAccessState(date, hour);
+    const forceEditable = _isRowUnlocked(hour);
     const meta = getHourMeta(date, hour);
     const hadExistingNote = !!(meta && meta.note && meta.note.length > 0);
 
@@ -1286,8 +1292,8 @@
       // 未来时段：完全不允许写（虽然 input 也会 disabled，双保险）
       return;
     }
-    if (access === 'grace-fill') {
-      // 过了容差：之前空备注可以写；之前有备注就不能再修改
+    if (access === 'grace-fill' && !forceEditable) {
+      // 未解锁：过了容差，之前空备注可以写；之前有备注就不能再修改
       if (hadExistingNote && value !== meta.note) {
         // 用户在 textarea 里打了字尝试改——我们回滚到原值并提示
         const ta = document.querySelector(`.note-input[data-hour="${hour}"]`);
@@ -1301,7 +1307,7 @@
       saveRecords();
       return;
     }
-    // editable：正常修改；值变化才更新时间戳（保留"最新"时间语义）
+    // editable 或者 已解锁(forceEditable=true) 即使 grace-fill：正常修改；值变化才更新时间戳（保留"最新"时间语义）
     if (meta.note !== value) {
       meta.note = value;
       meta.noteTimestamp = getNow().getTime();
