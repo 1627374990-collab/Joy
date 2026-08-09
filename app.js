@@ -925,13 +925,18 @@
 
           renderStatusCell(td, currentDate, hourStr, cat.id, sub ? sub.id : null, access);
 
-          // ===== 修改键：只有进入本行修改态才允许点击切换状态 =====
-          if (rowUnlocked) {
-            td.addEventListener('click', () => handleCellClick(td, currentDate, hourStr, cat.id, sub ? sub.id : null));
-          } else {
+          // ===== 修改键：平常（未解锁）也要允许**新增记录**（空→√ 填第一次），只有已填内容才需要解锁后再改 =====
+          // 所以 click listener 无条件绑定，真正的拦截放在 handleCellClick 里（基于『行锁定 && entry.status !== EMPTY』判断）
+          td.addEventListener('click', () => handleCellClick(td, currentDate, hourStr, cat.id, sub ? sub.id : null));
+          const entryNow = getEntry(currentDate, hourStr, cat.id, sub ? sub.id : null);
+          const cellHasContent = entryNow.status !== STATUS_EMPTY;
+          if (!rowUnlocked && cellHasContent) {
             td.classList.add('cell-locked');
-            td.title = rowUnlocked ? td.title : (td.title ? td.title + ' · ' : '') + '🔒 请先点右侧「修改」键解锁该行';
+            td.title = (td.title ? td.title + ' · ' : '') + '🔒 已填内容：请先点右侧「修改」键解锁该行后再修改';
             td.style.cursor = 'not-allowed';
+          } else if (!rowUnlocked) {
+            // 空单元格：平常仍可点一下填记录（不锁定）；若超过容差时间写入会自动高亮
+            td.title = (td.title ? td.title + ' · ' : '') + '空白记录：点击即可新增，超过容差时间填入会自动高亮';
           }
           tr.appendChild(td);
         });
@@ -1119,30 +1124,35 @@
     const meta = getHourMeta(date, hour);
     const access = accessHint || getHourAccessState(date, hour);
     const unlocked = rowUnlockedHint === true;
+    const hasExistingNote = !!(meta && typeof meta.note === 'string' && meta.note.length > 0);
     tdNote.innerHTML = '';
     const textarea = document.createElement('textarea');
     textarea.className = 'note-input';
-    textarea.placeholder = access === 'future' ? '未到时间' : (unlocked ? 'Note...' : '🔒 先点「修改」解锁后输入');
+    let placeholder;
+    if (access === 'future') placeholder = '未到时间';
+    else if (unlocked) placeholder = 'Note...';
+    else if (hasExistingNote) placeholder = '🔒 已有备注：先点「修改」解锁后再编辑';
+    else placeholder = '（可直接新增备注；超时填入会自动高亮）';
+    textarea.placeholder = placeholder;
     textarea.value = meta.note || '';
     textarea.dataset.hour = hour;
     if (access === 'future') {
       textarea.disabled = true;
       textarea.classList.add('note-disabled');
-    } else if (!unlocked) {
-      // ===== 修改键：默认未进入修改状态，备注也锁定（只读 + 不可聚焦）=====
+    } else if (!unlocked && hasExistingNote) {
+      // ===== 修改键：默认未进入修改状态且"已经填过备注" → 备注锁定（只读 + 不可聚焦）
+      // 空备注（还没填过）→ 即使未解锁也允许直接写（对应"平常也能新增记录"）
       textarea.disabled = true;
       textarea.classList.add('note-row-locked');
-      textarea.title = '🔒 请先点右侧「修改」键解锁该行后再输入备注';
+      textarea.title = '🔒 已有备注：请先点右侧「修改」键解锁该行后再编辑';
     }
     // 过时未填空白 → 不再给 cell-grace 视觉样式（保持表格原样）；只有真正 noteTimestamp 在容差外的才会高亮(见 updateNoteHighlight)
     textarea.addEventListener('input', _debounce((e) => {
-      if (!unlocked && access !== 'future') return; // 锁定态下 ignore（理论上 disabled 不会触发，双保险）
       const h = e.target.dataset.hour;
       saveNote(date, h, e.target.value);
       updateNoteHighlight(tdNote, date, h);
     }, 180));
     textarea.addEventListener('blur', (e) => {
-      if (!unlocked && access !== 'future') return;
       const h = e.target.dataset.hour;
       if (!h) return;
       const m = getHourMeta(date, h);
@@ -1219,8 +1229,16 @@
     const entry = getEntry(date, hour, categoryId, subId);
     const hadContent = entry.status !== STATUS_EMPTY;
 
+    // 平常（未解锁）只允许 新增 记录：空→√(STATUS_CHECKED) 或 空→×(STATUS_CROSSED)；
+    // 一旦已经填了内容（hadContent=true），再点修改必须先解锁
+    if (!forceEditable && hadContent) {
+      showSnackbar(`${hour}:00 已有记录：请先点右侧「修改」键解锁该行后再修改`);
+      return;
+    }
+
     if (access === 'grace-fill' && !forceEditable) {
       // 未解锁：过了容差窗口，只允许填入空单元格（不能改写已有的）
+      // 注意：上面 hadContent 拦截已经 return，这里进入说明一定是空单元格 → 正常填入（超容差→之后会自动高亮 OOR）
       if (hadContent) {
         showSnackbar(`${hour}:00 已过容差时间，不可修改已填内容`);
         return;
