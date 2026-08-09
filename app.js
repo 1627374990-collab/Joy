@@ -95,7 +95,7 @@
       'cat_ua_dfh4e_s_scc': 45,
       'cat_ua_dfh3b_s_6e': 50,
       // Fixed columns
-      'hour': 100, 'note': 120, 'time': 80, 'del': 32,
+      'hour': 100, 'note': 120, 'time': 80, 'del': 32, 'edit': 38,
     },
     defaultColWidth: 60,
     pdfExportDays: 7,
@@ -137,6 +137,25 @@
   }
   let categories = loadCategories();
   let records = loadRecords();
+
+  // ===== Row-Level Edit Lock ("修改键") =====
+  // 空集合 = 所有行默认锁定；Set 里的元素是 2 位小时字符串 ("00".."23")
+  // - 点击某行最右侧的「修改」按钮 → 把 hour 加入 Set（进入修改状态）
+  // - 再次点击 → 从 Set 移除（退出修改状态）
+  // - 不在 Set 内的行：状态单元格点击切换禁用、备注 textarea 只读、时间单元格禁用编辑
+  // - 状态不保存到 localStorage（刷新即全锁定，避免意外遗留开放编辑）
+  const _rowEditModeHours = new Set();
+  function _isRowUnlocked(hourStr) {
+    return _rowEditModeHours.has(String(hourStr).padStart(2, '0'));
+  }
+  function _toggleRowEditMode(hourStr) {
+    const h = String(hourStr).padStart(2, '0');
+    if (_rowEditModeHours.has(h)) {
+      _rowEditModeHours.delete(h);
+    } else {
+      _rowEditModeHours.add(h);
+    }
+  }
 
   // ===== Helpers =====
   function getGMTDateString(date) {
@@ -504,7 +523,7 @@
   // 不再读 settings.columnWidths 用户历史保存值，统一使用 DEFAULT_SETTINGS.columnWidths 中定义的默认列宽；
   // 这样可避免用户拖拽后列宽/表头高度异常，冻结列 left 累加值也更稳定。
   // 固定列（hour/note/time/del）有最小宽度兜底，避免 defaultColWidth 缩小时把它们挤坏导致文字被裁。
-  const MIN_COL_WIDTHS = { hour: 95, note: 120, time: 80, del: 30 };
+  const MIN_COL_WIDTHS = { hour: 95, note: 120, time: 80, del: 30, edit: 34 };
   function getColumnWidth(key) {
     const defaults = (DEFAULT_SETTINGS && DEFAULT_SETTINGS.columnWidths) || {};
     let w = (typeof defaults[key] === 'number' && defaults[key] > 0)
@@ -703,6 +722,7 @@
     });
     allConcreteColKeys.push('note');
     allConcreteColKeys.push('time');
+    allConcreteColKeys.push('edit');
 
     // ===== Build colgroup as the SINGLE source of truth for column widths =====
     const table = document.getElementById('status-table') || document.querySelector('.status-table');
@@ -771,10 +791,18 @@
 
     const thTime = document.createElement('th');
     thTime.className = 'time-cell';
-    thTime.textContent = '填入时间';
+    thTime.textContent = '填入';
     thTime.rowSpan = headerRows;
     applyColumnWidth(thTime, 'time');
     headerTr.appendChild(thTime);
+
+    const thEdit = document.createElement('th');
+    thEdit.className = 'edit-header';
+    thEdit.textContent = '修改';
+    thEdit.title = '解锁本行后可修改状态与备注（再次点击退出修改态）';
+    thEdit.rowSpan = headerRows;
+    applyColumnWidth(thEdit, 'edit');
+    headerTr.appendChild(thEdit);
 
     head.appendChild(headerTr);
 
@@ -853,10 +881,13 @@
     for (let h = 0; h < HOURS; h++) {
       const hourStr = String(h).padStart(2, '0');
       const tr = document.createElement('tr');
+      const rowUnlocked = _isRowUnlocked(hourStr);
 
       if (currentDate === today && hourStr === currentHour) {
         tr.className = 'current-hour';
       }
+      if (rowUnlocked) tr.classList.add('row-unlocked');
+      else tr.classList.add('row-locked');
 
       const access = getHourAccessState(currentDate, hourStr, now.getTime());
       tr.dataset.hourAccess = access;
@@ -893,7 +924,15 @@
           }
 
           renderStatusCell(td, currentDate, hourStr, cat.id, sub ? sub.id : null, access);
-          td.addEventListener('click', () => handleCellClick(td, currentDate, hourStr, cat.id, sub ? sub.id : null));
+
+          // ===== 修改键：只有进入本行修改态才允许点击切换状态 =====
+          if (rowUnlocked) {
+            td.addEventListener('click', () => handleCellClick(td, currentDate, hourStr, cat.id, sub ? sub.id : null));
+          } else {
+            td.classList.add('cell-locked');
+            td.title = rowUnlocked ? td.title : (td.title ? td.title + ' · ' : '') + '🔒 请先点右侧「修改」键解锁该行';
+            td.style.cursor = 'not-allowed';
+          }
           tr.appendChild(td);
         });
       });
@@ -901,14 +940,43 @@
       const tdNote = document.createElement('td');
       tdNote.className = 'note-cell';
       applyColumnWidth(tdNote, 'note');
-      renderNoteCell(tdNote, currentDate, hourStr, access);
+      renderNoteCell(tdNote, currentDate, hourStr, access, /* rowUnlocked */ rowUnlocked);
       tr.appendChild(tdNote);
 
       const tdTime = document.createElement('td');
       tdTime.className = 'time-cell';
+      if (!rowUnlocked) {
+        tdTime.classList.add('cell-locked');
+        tdTime.title = '🔒 请先解锁该行后再修改';
+      }
       applyColumnWidth(tdTime, 'time');
       renderTimeCell(tdTime, currentDate, hourStr);
       tr.appendChild(tdTime);
+
+      // ===== 修改键 td（最右侧）：点一下进入修改态，再点一下退出 =====
+      const tdEdit = document.createElement('td');
+      tdEdit.className = 'edit-cell';
+      tdEdit.dataset.hour = hourStr;
+      applyColumnWidth(tdEdit, 'edit');
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = rowUnlocked ? 'btn btn-tiny btn-edit-mode is-editing' : 'btn btn-tiny btn-edit-mode';
+      editBtn.innerHTML = rowUnlocked
+        ? '<span class="edit-icon">✏️</span><span class="edit-text">退出</span>'
+        : '<span class="edit-icon">🔧</span><span class="edit-text">修改</span>';
+      editBtn.title = rowUnlocked
+        ? `${hourStr}:00 正在编辑 · 点击退出修改状态并锁定`
+        : `${hourStr}:00 已锁定 · 点击进入修改状态以编辑状态/备注`;
+      editBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        _toggleRowEditMode(hourStr);
+        // 锁定/解锁状态改变后，整表重绘最省事：状态 cell click / note disabled / 按钮文案 全部一起刷新
+        renderAll(true);
+        scheduleRefreshStickyOffset();
+      });
+      tdEdit.appendChild(editBtn);
+      tr.appendChild(tdEdit);
 
       body.appendChild(tr);
     }
@@ -1047,26 +1115,34 @@
     }
   }
 
-  function renderNoteCell(tdNote, date, hour, accessHint) {
+  function renderNoteCell(tdNote, date, hour, accessHint, rowUnlockedHint) {
     const meta = getHourMeta(date, hour);
     const access = accessHint || getHourAccessState(date, hour);
+    const unlocked = rowUnlockedHint === true;
     tdNote.innerHTML = '';
     const textarea = document.createElement('textarea');
     textarea.className = 'note-input';
-    textarea.placeholder = access === 'future' ? '未到时间' : 'Note...';
+    textarea.placeholder = access === 'future' ? '未到时间' : (unlocked ? 'Note...' : '🔒 先点「修改」解锁后输入');
     textarea.value = meta.note || '';
     textarea.dataset.hour = hour;
     if (access === 'future') {
       textarea.disabled = true;
       textarea.classList.add('note-disabled');
+    } else if (!unlocked) {
+      // ===== 修改键：默认未进入修改状态，备注也锁定（只读 + 不可聚焦）=====
+      textarea.disabled = true;
+      textarea.classList.add('note-row-locked');
+      textarea.title = '🔒 请先点右侧「修改」键解锁该行后再输入备注';
     }
     // 过时未填空白 → 不再给 cell-grace 视觉样式（保持表格原样）；只有真正 noteTimestamp 在容差外的才会高亮(见 updateNoteHighlight)
     textarea.addEventListener('input', _debounce((e) => {
+      if (!unlocked && access !== 'future') return; // 锁定态下 ignore（理论上 disabled 不会触发，双保险）
       const h = e.target.dataset.hour;
       saveNote(date, h, e.target.value);
       updateNoteHighlight(tdNote, date, h);
     }, 180));
     textarea.addEventListener('blur', (e) => {
+      if (!unlocked && access !== 'future') return;
       const h = e.target.dataset.hour;
       if (!h) return;
       const m = getHourMeta(date, h);
