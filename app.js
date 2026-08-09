@@ -95,7 +95,7 @@
       'cat_ua_dfh4e_s_scc': 45,
       'cat_ua_dfh3b_s_6e': 50,
       // Fixed columns
-      'hour': 75, 'note': 120, 'time': 80, 'del': 32,
+      'hour': 100, 'note': 120, 'time': 80, 'del': 32,
     },
     defaultColWidth: 60,
     pdfExportDays: 7,
@@ -359,10 +359,15 @@
   // 取消列宽修改功能（减少表头常显障碍）：
   // 不再读 settings.columnWidths 用户历史保存值，统一使用 DEFAULT_SETTINGS.columnWidths 中定义的默认列宽；
   // 这样可避免用户拖拽后列宽/表头高度异常，冻结列 left 累加值也更稳定。
+  // 固定列（hour/note/time/del）有最小宽度兜底，避免 defaultColWidth 缩小时把它们挤坏导致文字被裁。
+  const MIN_COL_WIDTHS = { hour: 95, note: 120, time: 80, del: 30 };
   function getColumnWidth(key) {
     const defaults = (DEFAULT_SETTINGS && DEFAULT_SETTINGS.columnWidths) || {};
-    if (typeof defaults[key] === 'number' && defaults[key] > 0) return defaults[key];
-    return (settings.defaultColWidth && settings.defaultColWidth > 0) ? settings.defaultColWidth : 60;
+    let w = (typeof defaults[key] === 'number' && defaults[key] > 0)
+      ? defaults[key]
+      : ((settings.defaultColWidth && settings.defaultColWidth > 0) ? settings.defaultColWidth : 60);
+    if (MIN_COL_WIDTHS[key] && w < MIN_COL_WIDTHS[key]) w = MIN_COL_WIDTHS[key];
+    return w;
   }
 
   function applyColumnWidth(el, key) {

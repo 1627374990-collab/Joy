@@ -371,16 +371,19 @@ input, textarea {
   background: inherit;
   font-weight: 600;
   color: #1976d2;
-  min-width: 54px;
+  min-width: 100px;
   text-align: left;
   padding-left: 12px;
+  padding-right: 12px;
+  white-space: nowrap;
+  overflow: visible;
   border-right: 2px solid #e0e0e0;
-  /* 左侧冻结列：iOS 合成层提升 + backface-visibility，避免横滚时重新栅格化 */
+  /* 左侧冻结列：iOS 合成层提升 + backface-visibility，避免横滚时重新栅格化；
+     不再加 will-change:transform（过度提示会让合成层边界抖动，sticky left:0 时第一个字符容易被裁 1px）*/
   -webkit-transform: translateZ(0);
   transform: translateZ(0);
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
-  will-change: transform;
 }
 
 /* 表头第一列在横滚时也被吸到最左且盖在数据行上 */
