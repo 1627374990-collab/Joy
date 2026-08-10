@@ -160,6 +160,16 @@
     return count || 1;
   }
 
+  function isOutOfRange(date, hour, timestamp) {
+    const tolerance = (settings.timeRangeMinutes != null) ? settings.timeRangeMinutes * 60 * 1000 : 15 * 60 * 1000;
+    const y = parseInt(date.slice(0, 4), 10);
+    const m = parseInt(date.slice(5, 7), 10) - 1;
+    const d = parseInt(date.slice(8, 10), 10);
+    const recordHourStart = new Date(Date.UTC(y, m, d, parseInt(hour, 10), 0, 0, 0)).getTime();
+    const ts = new Date(timestamp).getTime();
+    return ts < recordHourStart || ts > recordHourStart + tolerance;
+  }
+
   function collectDateData(date) {
     const day = records[date] || {};
     const hours = [];
@@ -173,6 +183,16 @@
         entries: {},
         note: meta.note || '',
         noteTimestamp: meta.noteTimestamp,
+        // ===== PDF 使用：行级异常状态 =====
+        hasCrossed: false,
+        noteHasText: !!(meta.note && meta.note.trim().length > 0),
+        // key = catId + '::' + subId  →  { oor:boolean }
+        entryOorMap: {},
+        // note 自己是否容差外（对应 .note-input.out-of-range 高亮）
+        noteOor: false,
+        // 最新填入总时间戳是否容差外（对应 .time-cell.out-of-range）
+        timeOor: false,
+        _latestTs: null,
       };
 
       categories.forEach(cat => {
@@ -181,13 +201,36 @@
         subs.forEach(sub => {
           const key = sub ? sub.id : '_main';
           const ed = hourData[cat.id] ? hourData[cat.id][key] : null;
+          const status = ed ? ed.status : STATUS_EMPTY;
+          const ts = ed ? ed.timestamp : null;
           row.entries[cat.id][key] = {
             name: sub ? sub.name : cat.name,
-            status: ed ? ed.status : STATUS_EMPTY,
-            timestamp: ed ? ed.timestamp : null,
+            status: status,
+            timestamp: ts,
           };
+          if (status === STATUS_CROSSED) row.hasCrossed = true;
+          const mapKey = cat.id + '::' + key;
+          let oor = false;
+          if (ts && status !== STATUS_EMPTY && settings.outOfRangeHighlight) {
+            oor = isOutOfRange(date, hourStr, ts);
+          }
+          row.entryOorMap[mapKey] = { oor };
+          if (ts) {
+            if (row._latestTs === null || ts > row._latestTs) row._latestTs = ts;
+          }
         });
       });
+
+      // 汇总 noteOor 与 timeOor
+      if (meta.noteTimestamp && (meta.note || '').trim().length > 0 && settings.outOfRangeHighlight) {
+        row.noteOor = isOutOfRange(date, hourStr, meta.noteTimestamp);
+      }
+      if (meta.noteTimestamp) {
+        if (row._latestTs === null || meta.noteTimestamp > row._latestTs) row._latestTs = meta.noteTimestamp;
+      }
+      if (row._latestTs && settings.outOfRangeHighlight) {
+        row.timeOor = isOutOfRange(date, hourStr, row._latestTs);
+      }
       hours.push(row);
     }
     return hours;
@@ -474,9 +517,17 @@ table.pdf-table th, table.pdf-table td {
     const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
     const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader(1020);
     const css = buildPrintCSSBase(totalWidth);
+    // ===== 用户自定义颜色值注入到打印 HTML（保证 PDF 生效）=====
+    const highlightColor = settings.highlightColor || '#ffeb3b';
+    const badBorderColor = settings.rowBadBorderColor || '#d32f2f';
+    const badBorderStyle = `box-shadow: inset 0 0 0 2px ${badBorderColor};`;
 
     let rowsHTML = '';
     hours.forEach(row => {
+      const rowBg = parseInt(row.hour) % 2 === 0 ? '#fafbfc' : '#ffffff';
+      const rowIsBad = row.hasCrossed || row.noteHasText;
+      const rowBadBorder = rowIsBad ? badBorderStyle : '';
+
       let statusCells = '';
       orderedCats.forEach((cat, ci) => {
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
@@ -486,31 +537,26 @@ table.pdf-table th, table.pdf-table td {
           const key = sub.id;
           const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
           const status = ed ? ed.status : '';
+          const mapKey = cat.id + '::' + key;
+          const oorInfo = row.entryOorMap && row.entryOorMap[mapKey];
+          const oorBg = oorInfo && oorInfo.oor ? `background:${highlightColor};` : '';
           const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
           const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-          statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
+          statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${oorBg}${div}${rowBadBorder}${noWrapBase}">${status || ''}</td>`;
         });
       });
 
-      let latest = null;
-      orderedCats.forEach(cat => {
-        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
-        subs.forEach(sub => {
-          const ed = row.entries[cat.id] ? row.entries[cat.id][sub.id] : null;
-          if (ed && ed.timestamp && (!latest || ed.timestamp > latest)) latest = ed.timestamp;
-        });
-      });
-      if (row.noteTimestamp && (!latest || row.noteTimestamp > latest)) latest = row.noteTimestamp;
-      const timeStr = latest ? getTimestampString(latest) : '';
+      const timeStr = _getLatestTimeString(row);
+      const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r?\n/g, '<br>');
+      const hourBg = row.timeOor ? `background:${highlightColor};` : '';
+      const noteBg = row.noteOor ? `background:${highlightColor};` : '';
+      const timeBg = row.timeOor ? `background:${highlightColor};` : '';
 
-      const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const rowClass = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
-
-      rowsHTML += `<tr style="${rowClass}">
-        <td style="border:1px solid #333;padding:6px 8px;font-weight:bold;font-size:13px;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
+      rowsHTML += `<tr style="background:${rowBg};">
+        <td style="border:1px solid #333;padding:6px 8px;font-weight:bold;font-size:13px;color:#1976d2;${hourBg}${rowBadBorder}${noWrapBase}">${row.hour}:00</td>
         ${statusCells}
-        <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:12px;word-break:break-word;white-space:normal;">${note}</td>
-        <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
+        <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:13px;line-height:1.5;word-break:break-word;white-space:pre-wrap;vertical-align:top;${noteBg}${rowBadBorder}">${note}</td>
+        <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${timeBg}${rowBadBorder}${noWrapBase}">${timeStr}</td>
       </tr>`;
     });
 
@@ -605,12 +651,53 @@ ${css.styleTag}
     const meta = _getPDFTableMeta();
     const { orderedCats, colWidths, colHeaders, totalWidth, hasParents, groups, effPid } = meta;
 
-    const S = 2;
+    // Layout constants (in canvas pixels, scale=2 for sharpness)
+    const S = 2; // scale factor
     const padX = 6 * S, padY = 5 * S;
     const headerH = (hasParents ? 3 : 2) * (24 * S) + 4 * S;
-    const rowH = 28 * S;
-    const hourCount = data.length;
-    const tableH = headerH + hourCount * rowH;
+    const baseRowH = 28 * S;          // 单行最小高度
+    const noteLineH = 14 * S;         // note 文字行高（对应字号 11S，行距 1.27）
+    const noteFontSize = 11 * S;
+
+    // ===== 第一步：预处理每行 Note 文本 wrap 后的行数 → 决定该行真实高度 rh =====
+    const tmpCanvas = document.createElement('canvas');
+    const tmpCtx = tmpCanvas.getContext('2d');
+    tmpCtx.font = `${noteFontSize}px -apple-system, "Microsoft YaHei", sans-serif`;
+    const noteColW = colWidths[colWidths.length - 2];
+    const noteInnerW = noteColW * S - 2 * padX;
+
+    function wrapNoteText(text) {
+      if (!text) return [];
+      const lines = [];
+      const paragraphs = String(text).split(/\r?\n/);
+      paragraphs.forEach(para => {
+        if (!para) { lines.push(''); return; }
+        let cur = '';
+        for (let i = 0; i < para.length; i++) {
+          const ch = para[i];
+          const tryStr = cur + ch;
+          if (tmpCtx.measureText(tryStr).width > noteInnerW && cur) {
+            lines.push(cur);
+            cur = ch;
+          } else {
+            cur = tryStr;
+          }
+        }
+        if (cur) lines.push(cur);
+      });
+      return lines;
+    }
+
+    const rowHeights = [];
+    const rowNoteLines = [];
+    data.forEach(row => {
+      const lines = wrapNoteText(row.note || '');
+      rowNoteLines.push(lines);
+      const noteNeeded = 2 * padY + Math.max(1, lines.length) * noteLineH;
+      rowHeights.push(Math.max(baseRowH, noteNeeded));
+    });
+
+    const tableH = headerH + rowHeights.reduce((s, h) => s + h, 0);
 
     let topH = 0;
     if (showTitle) topH += 30 * S + 14 * S;
@@ -622,9 +709,14 @@ ${css.styleTag}
     canvas.width = totalCanvasW;
     canvas.height = totalCanvasH;
     const ctx = canvas.getContext('2d');
+    ctx.scale(1, 1);
 
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // ===== 用户自定义异常高亮色 & 异常行边框色（PDF 里也要真实生效）=====
+    const highlightColor = settings.highlightColor || '#ffeb3b';
+    const badBorderColor = settings.rowBadBorderColor || '#d32f2f';
 
     let y = 6 * S;
 
@@ -657,8 +749,11 @@ ${css.styleTag}
     const tableX = 10 * S;
     let headerY = y;
     const r1H = 24 * S;
+    const defaultHeaderBg = '#e8f0fe';
+    const defaultSubBg = '#f0f4f8';
 
-    ctx.fillStyle = '#e8f0fe';
+    // "时间" cell
+    ctx.fillStyle = defaultHeaderBg;
     ctx.fillRect(tableX, headerY, colWidths[0] * S, (hasParents ? 3 : 2) * r1H + 4 * S);
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 1 * S;
@@ -680,8 +775,8 @@ ${css.styleTag}
         });
         let groupW = 0;
         for (let k = 0; k < colCount; k++) groupW += colWidths[colIdx + k] * S;
-        ctx.fillStyle = g.parent.color || '#e8f0fe';
-        if (gi > 0) ctx.fillStyle = '#bbdefb';
+        ctx.fillStyle = g.parent.color || defaultHeaderBg;
+        if (!g.parent.color && gi > 0) { ctx.fillStyle = '#bbdefb'; }
         ctx.fillRect(cx, headerY, groupW, r1H);
         ctx.strokeRect(cx, headerY, groupW, r1H);
         ctx.fillStyle = '#1565c0';
@@ -696,7 +791,7 @@ ${css.styleTag}
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
         let catW = 0;
         for (let k = 0; k < subs.length; k++) catW += colWidths[colIdx + k] * S;
-        ctx.fillStyle = cat.color || '#e8f0fe';
+        ctx.fillStyle = cat.color || defaultHeaderBg;
         ctx.fillRect(cx, headerY, catW, r1H);
         ctx.strokeRect(cx, headerY, catW, r1H);
         ctx.fillStyle = '#333';
@@ -710,7 +805,7 @@ ${css.styleTag}
 
     const noteW = colWidths[colWidths.length - 2] * S;
     const timeW = colWidths[colWidths.length - 1] * S;
-    ctx.fillStyle = '#e8f0fe';
+    ctx.fillStyle = defaultHeaderBg;
     ctx.fillRect(cx, headerY, noteW, (hasParents ? 3 : 2) * r1H + 4 * S);
     ctx.strokeRect(cx, headerY, noteW, (hasParents ? 3 : 2) * r1H + 4 * S);
     ctx.fillStyle = '#333';
@@ -718,7 +813,7 @@ ${css.styleTag}
     ctx.textAlign = 'center';
     ctx.fillText('Note', cx + noteW / 2, headerY + ((hasParents ? 3 : 2) * r1H + 4 * S) / 2 + 4 * S);
     cx += noteW;
-    ctx.fillStyle = '#e8f0fe';
+    ctx.fillStyle = defaultHeaderBg;
     ctx.fillRect(cx, headerY, timeW, (hasParents ? 3 : 2) * r1H + 4 * S);
     ctx.strokeRect(cx, headerY, timeW, (hasParents ? 3 : 2) * r1H + 4 * S);
     ctx.fillText('填入', cx + timeW / 2, headerY + ((hasParents ? 3 : 2) * r1H + 4 * S) / 2 + 4 * S);
@@ -732,7 +827,7 @@ ${css.styleTag}
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: cat.name }];
         let catW = 0;
         for (let k = 0; k < subs.length; k++) catW += colWidths[colIdx + k] * S;
-        ctx.fillStyle = cat.color || '#e8f0fe';
+        ctx.fillStyle = cat.color || defaultHeaderBg;
         ctx.fillRect(cx, headerY, catW, r1H);
         ctx.strokeRect(cx, headerY, catW, r1H);
         ctx.fillStyle = '#333';
@@ -751,7 +846,7 @@ ${css.styleTag}
       const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main', name: '' }];
       subs.forEach(sub => {
         const w = colWidths[colIdx] * S;
-        ctx.fillStyle = '#f0f4f8';
+        ctx.fillStyle = defaultSubBg;
         ctx.fillRect(cx, headerY, w, r1H + 4 * S);
         ctx.strokeRect(cx, headerY, w, r1H + 4 * S);
         ctx.fillStyle = '#555';
@@ -765,34 +860,48 @@ ${css.styleTag}
 
     let dataY = headerY + r1H + 4 * S;
 
-    data.forEach(row => {
-      const rh = rowH;
-      let dx = tableX;
+    data.forEach((row, rIdx) => {
+      const rh = rowHeights[rIdx];
+      const noteLines = rowNoteLines[rIdx];
       const rowBg = parseInt(row.hour) % 2 === 0 ? '#fafbfc' : '#ffffff';
+      const rowIsBad = row.hasCrossed || row.noteHasText;
+
+      // Hour cell 背景 + 文字
       ctx.fillStyle = rowBg;
-      ctx.fillRect(dx, dataY, colWidths[0] * S, rh);
-      ctx.strokeRect(dx, dataY, colWidths[0] * S, rh);
+      ctx.fillRect(tableX, dataY, colWidths[0] * S, rh);
       ctx.fillStyle = '#1976d2';
       ctx.font = `bold ${11 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
       ctx.textAlign = 'center';
-      ctx.fillText(row.hour + ':00', dx + colWidths[0] * S / 2, dataY + rh / 2 + 4 * S);
-      dx += colWidths[0] * S;
+      ctx.fillText(row.hour + ':00', tableX + colWidths[0] * S / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
+      if (row.timeOor) {
+        ctx.fillStyle = highlightColor;
+        ctx.fillRect(tableX, dataY, colWidths[0] * S, rh);
+        ctx.fillStyle = '#1976d2';
+        ctx.fillText(row.hour + ':00', tableX + colWidths[0] * S / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
+      }
+
+      let dx = tableX + colWidths[0] * S;
 
       colIdx = 1;
       orderedCats.forEach(cat => {
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
         subs.forEach(sub => {
           const w = colWidths[colIdx] * S;
+          const mapKey = cat.id + '::' + (sub ? sub.id : '_main');
+          const oorInfo = row.entryOorMap[mapKey];
+          const ed = row.entries[cat.id] ? row.entries[cat.id][sub ? sub.id : '_main'] : null;
+          const status = ed ? ed.status : '';
           ctx.fillStyle = rowBg;
           ctx.fillRect(dx, dataY, w, rh);
-          ctx.strokeRect(dx, dataY, w, rh);
-          const ed = row.entries[cat.id] ? row.entries[cat.id][sub.id] : null;
-          const status = ed ? ed.status : '';
+          if (oorInfo && oorInfo.oor) {
+            ctx.fillStyle = highlightColor;
+            ctx.fillRect(dx + 1, dataY + 1, w - 2, rh - 2);
+          }
           const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
           ctx.fillStyle = color;
           ctx.font = `bold ${12 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
           ctx.textAlign = 'center';
-          if (status) ctx.fillText(status, dx + w / 2, dataY + rh / 2 + 4 * S);
+          if (status) ctx.fillText(status, dx + w / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
           dx += w;
           colIdx++;
         });
@@ -801,23 +910,51 @@ ${css.styleTag}
       const nw = colWidths[colWidths.length - 2] * S;
       ctx.fillStyle = rowBg;
       ctx.fillRect(dx, dataY, nw, rh);
-      ctx.strokeRect(dx, dataY, nw, rh);
+      if (row.noteOor) {
+        ctx.fillStyle = highlightColor;
+        ctx.fillRect(dx + 1, dataY + 1, nw - 2, rh - 2);
+      }
       ctx.fillStyle = '#333';
-      ctx.font = `${10 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
+      ctx.font = `${noteFontSize}px -apple-system, "Microsoft YaHei", sans-serif`;
       ctx.textAlign = 'left';
-      const noteText = (row.note || '').substring(0, 40);
-      ctx.fillText(noteText, dx + padX, dataY + rh / 2 + 3 * S);
-      dx += nw;
+      const lines = noteLines || [];
+      for (let li = 0; li < lines.length; li++) {
+        const lineY = dataY + padY + (li + 1) * noteLineH;
+        ctx.fillText(lines[li], dx + padX, lineY);
+      }
 
       const tw = colWidths[colWidths.length - 1] * S;
       ctx.fillStyle = rowBg;
       ctx.fillRect(dx, dataY, tw, rh);
-      ctx.strokeRect(dx, dataY, tw, rh);
+      if (row.timeOor) {
+        ctx.fillStyle = highlightColor;
+        ctx.fillRect(dx + 1, dataY + 1, tw - 2, rh - 2);
+      }
       ctx.fillStyle = '#666';
       ctx.font = `${10 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
       ctx.textAlign = 'right';
       const timeStr = _getLatestTimeString(row);
-      ctx.fillText(timeStr, dx + tw - padX, dataY + rh / 2 + 3 * S);
+      ctx.fillText(timeStr, dx + tw - padX, dataY + Math.min(rh / 2, baseRowH / 2) + 3 * S);
+
+      // 绘制整行网格边框
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1 * S;
+      let gridX = tableX;
+      for (let i = 0; i < colWidths.length; i++) {
+        const ww = colWidths[i] * S;
+        ctx.strokeRect(gridX, dataY, ww, rh);
+        gridX += ww;
+      }
+
+      // ===== 异常行描边：hasCrossed || noteHasText → 在整行外描 2px badBorderColor =====
+      if (rowIsBad) {
+        ctx.save();
+        ctx.strokeStyle = badBorderColor;
+        ctx.lineWidth = 2 * S;
+        const halfLW = S;
+        ctx.strokeRect(tableX + halfLW, dataY + halfLW, totalWidth * S - 2 * halfLW, rh - 2 * halfLW);
+        ctx.restore();
+      }
 
       dataY += rh;
     });
