@@ -32,6 +32,7 @@
   //    否则 const 的暂时性死区（TDZ）会导致 ReferenceError，整个设置页功能瘫痪。
   const DEFAULT_SETTINGS = {
     highlightColor: '#ffeb3b',
+    rowBadBorderColor: '#d32f2f',
     timeRangeMinutes: 15,
     outOfRangeHighlight: true,
     reminderEnabled: true,
@@ -661,6 +662,8 @@
 
     // Populate form（先填默认值，管理者模式再应用UI锁定——非管理者会覆盖为15并disabled）
     document.getElementById('highlight-color').value = settings.highlightColor;
+    const brbc = document.getElementById('bad-row-border-color');
+    if (brbc) brbc.value = settings.rowBadBorderColor || '#d32f2f';
     document.getElementById('time-range').value = settings.timeRangeMinutes;
     document.getElementById('enable-highlight').checked = settings.outOfRangeHighlight;
     document.getElementById('enable-reminder').checked = settings.reminderEnabled !== false;
@@ -695,6 +698,8 @@
       try {
         const hi = document.getElementById('highlight-color');
         if (hi) settings.highlightColor = hi.value;
+        const brb = document.getElementById('bad-row-border-color');
+        if (brb) settings.rowBadBorderColor = brb.value;
         const tr = document.getElementById('time-range');
         if (tr) settings.timeRangeMinutes = parseInt(tr.value, 10) || 30;
         const eh = document.getElementById('enable-highlight');
@@ -717,6 +722,12 @@
 
     document.getElementById('highlight-color').addEventListener('input', (e) => {
       settings.highlightColor = e.target.value;
+      persistHighlightSettings();
+    });
+
+    const brbInput = document.getElementById('bad-row-border-color');
+    if (brbInput) brbInput.addEventListener('input', (e) => {
+      settings.rowBadBorderColor = e.target.value;
       persistHighlightSettings();
     });
 

@@ -552,19 +552,53 @@ tbody tr.row-future td.hour-cell {
   color: #333;
 }
 
-/* Note cell textarea */
+/* ===== 异常行边框：该行有 ✗ 或 Note 有填文字时整行加描边 =====
+   使用 box-shadow inset 给每个 td 画内描边（2px 上下 + 相邻 td 各出 1px 左右 → 竖线合计 2px）*/
+.status-table tbody tr.row-bad-border td {
+  box-shadow:
+    inset 1px 0 0 var(--row-bad-border-color, #d32f2f),
+    inset -1px 0 0 var(--row-bad-border-color, #d32f2f),
+    inset 0 2px 0 var(--row-bad-border-color, #d32f2f),
+    inset 0 -2px 0 var(--row-bad-border-color, #d32f2f) !important;
+}
+.status-table tbody tr.row-bad-border td:first-child {
+  box-shadow:
+    inset 2px 0 0 var(--row-bad-border-color, #d32f2f),
+    inset -1px 0 0 var(--row-bad-border-color, #d32f2f),
+    inset 0 2px 0 var(--row-bad-border-color, #d32f2f),
+    inset 0 -2px 0 var(--row-bad-border-color, #d32f2f) !important;
+}
+.status-table tbody tr.row-bad-border td:last-child {
+  box-shadow:
+    inset 1px 0 0 var(--row-bad-border-color, #d32f2f),
+    inset -2px 0 0 var(--row-bad-border-color, #d32f2f),
+    inset 0 2px 0 var(--row-bad-border-color, #d32f2f),
+    inset 0 -2px 0 var(--row-bad-border-color, #d32f2f) !important;
+}
+.status-table tbody tr.row-bad-border td:first-child:last-child {
+  box-shadow:
+    inset 0 0 0 2px var(--row-bad-border-color, #d32f2f) !important;
+}
+
+/* Note cell textarea —— 扩大字号 + 自动换行 + 行高自适应 */
 .note-input {
   width: 100%;
-  min-height: 34px;
+  min-height: 46px;
+  height: auto;
   border: 1px solid transparent;
   background: transparent;
-  padding: 4px 6px;
+  padding: 8px 10px;
   border-radius: 6px;
-  font-size: 12px;
-  resize: vertical;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
   color: #333;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
   transition: border-color 0.2s, background 0.2s;
   outline: none;
+  vertical-align: top;
 }
 
 .note-input:focus {
