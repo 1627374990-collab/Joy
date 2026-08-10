@@ -1951,32 +1951,103 @@
   }
 
   // Main entry: render each day to canvas, assemble into a single PDF via jsPDF
+  // =================================================================
+  // 辅助：把超大尺寸 canvas 按比例缩小到不超过设备安全上限，避免
+  // iOS Safari / 部分 Chrome GPU 进程在 toDataURL / getImageData 阶段
+  // 直接抛 canvas size exceeds the maximum supported size 错误。
+  // =================================================================
+  function _resizeCanvasToSafe(canvas) {
+    const SAFE_AREA = 16 * 1000 * 1000; // 16MPx，iOS Safari 相对稳定的上限
+    const SAFE_EDGE = 4096;
+    const W = canvas.width, H = canvas.height;
+    const maxEdge = Math.max(W, H);
+    const area = W * H;
+    let scale = 1;
+    if (maxEdge > SAFE_EDGE) scale = Math.min(scale, SAFE_EDGE / maxEdge);
+    if (area > SAFE_AREA) scale = Math.min(scale, Math.sqrt(SAFE_AREA / area));
+    if (scale >= 0.999) return canvas;
+    const nW = Math.max(1, Math.round(W * scale));
+    const nH = Math.max(1, Math.round(H * scale));
+    const off = document.createElement('canvas');
+    off.width = nW;
+    off.height = nH;
+    const octx = off.getContext('2d');
+    octx.imageSmoothingEnabled = true;
+    octx.imageSmoothingQuality = 'high';
+    octx.drawImage(canvas, 0, 0, nW, nH);
+    return off;
+  }
+
+  function _canvasToBestDataURL(canvas, quality) {
+    let fmt = 'JPEG', url;
+    try {
+      url = canvas.toDataURL('image/jpeg', quality);
+    } catch (eJpeg) {
+      // 某些浏览器（尤其 iOS Safari 旧版）在某些 canvas 尺寸 / alpha 通道情况下
+      // 会在 toDataURL('image/jpeg') 抛 SecurityError / IndexSizeError，
+      // 这时切 PNG 格式兜底。
+      fmt = 'PNG';
+      try {
+        url = canvas.toDataURL('image/png');
+      } catch (ePng) {
+        // 再兜底：按 0.85 quality 再试 JPEG，仍不行就抛原错误
+        try {
+          url = canvas.toDataURL('image/jpeg', 0.85);
+          fmt = 'JPEG';
+        } catch (_) {
+          throw ePng;
+        }
+      }
+    }
+    return { fmt, url };
+  }
+
   async function exportRangeViaCanvasPDF(dates) {
     if (!window.jspdf || !jspdf.jsPDF) {
-      throw new Error('PDF 库未加载');
+      const msg = 'PDF 组件未加载，请检查网络或刷新页面后再试';
+      console.error('[PDF] jsPDF 缺失: window.jspdf=', window.jspdf);
+      showSnackbar(msg);
+      throw new Error(msg);
     }
     const { jsPDF } = jspdf;
     const PAGE_W_MM = 297, PAGE_H_MM = 210, MARGIN_MM = 8;
     const CONTENT_W_MM = PAGE_W_MM - 2 * MARGIN_MM;
     const CONTENT_H_MM = PAGE_H_MM - 2 * MARGIN_MM;
 
-    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    let total = 0, filled = 0;
+    let pdf;
+    try {
+      pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    } catch (initErr) {
+      console.error('[PDF] jsPDF 初始化失败:', initErr);
+      showSnackbar('PDF 初始化失败: ' + (initErr && initErr.message ? initErr.message : '未知错误'));
+      throw initErr;
+    }
+
+    let total = 0, filled = 0, failedDays = 0;
+    const errors = [];
 
     for (let i = 0; i < dates.length; i++) {
       const date = dates[i];
-      const data = collectDayData(date);
-      data.forEach(row => {
-        categories.forEach(cat => {
-          const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [null];
-          subs.forEach(sub => {
-            const key = sub ? sub.id : '_main';
-            total++;
-            const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
-            if (ed && ed.status && ed.status !== '') filled++;
+      let data = null;
+      try {
+        data = collectDayData(date);
+        data.forEach(row => {
+          categories.forEach(cat => {
+            const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [null];
+            subs.forEach(sub => {
+              const key = sub ? sub.id : '_main';
+              total++;
+              const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
+              if (ed && ed.status && ed.status !== '') filled++;
+            });
           });
         });
-      });
+      } catch (dataErr) {
+        failedDays++;
+        errors.push(`${date}: 数据加载失败 (${dataErr.message || dataErr})`);
+        console.error(`[PDF] ${date} 数据收集失败:`, dataErr);
+        continue;
+      }
 
       const showTitle = (i === 0);
       let titleText = null, subtitleText = null;
@@ -1990,27 +2061,85 @@
         }
       }
 
-      const canvas = _drawDayToCanvas(date, data, showTitle, titleText, subtitleText);
+      try {
+        const rawCanvas = _drawDayToCanvas(date, data, showTitle, titleText, subtitleText);
+        // === 关键：canvas 过大先缩小 ===
+        const canvas = _resizeCanvasToSafe(rawCanvas);
 
-      if (i > 0) pdf.addPage();
+        // === 第一页不需要 addPage，后续每页前一页写完后加 ===
+        if (i > 0) {
+          try { pdf.addPage(); } catch (apErr) {
+            throw new Error('新增 PDF 页面失败: ' + (apErr && apErr.message || apErr));
+          }
+        }
 
-      const ratio = canvas.width / canvas.height;
-      let drawWmm = CONTENT_W_MM;
-      let drawHmm = drawWmm / ratio;
-      if (drawHmm > CONTENT_H_MM) {
-        drawHmm = CONTENT_H_MM;
-        drawWmm = drawHmm * ratio;
+        const ratio = canvas.width / canvas.height;
+        let drawWmm = CONTENT_W_MM;
+        let drawHmm = drawWmm / ratio;
+        if (drawHmm > CONTENT_H_MM) {
+          drawHmm = CONTENT_H_MM;
+          drawWmm = drawHmm * ratio;
+        }
+        const x = MARGIN_MM + (CONTENT_W_MM - drawWmm) / 2;
+        const y = MARGIN_MM + (CONTENT_H_MM - drawHmm) / 2;
+
+        const { fmt, url } = _canvasToBestDataURL(canvas, 0.92);
+
+        try {
+          pdf.addImage(url, fmt, x, y, drawWmm, drawHmm, undefined, 'FAST');
+        } catch (imgErr) {
+          // FAST / 指定格式失败 → 切 MEDIUM + 强制 PNG 再试一次，尽量不让整页失败
+          try {
+            const pngFallback = fmt === 'PNG' ? url : canvas.toDataURL('image/png');
+            pdf.addImage(pngFallback, 'PNG', x, y, drawWmm, drawHmm, undefined, 'MEDIUM');
+          } catch (imgErr2) {
+            // 还失败 → 在本页写一行占位错误文字，保证 PDF 至少能保存下来
+            try {
+              pdf.setTextColor(198, 40, 40);
+              pdf.setFontSize(11);
+              pdf.text(`[渲染失败] ${date}: ${imgErr2 && imgErr2.message || imgErr2 || 'addImage error'}`, MARGIN_MM + 2, MARGIN_MM + 10);
+            } catch (_) {}
+            throw new Error('页面图片写入失败: ' + (imgErr2 && imgErr2.message || imgErr2));
+          }
+        }
+      } catch (pageErr) {
+        failedDays++;
+        errors.push(`${date}: ${pageErr.message || pageErr}`);
+        console.error(`[PDF] ${date} 页面生成失败:`, pageErr);
+        // 出错也要保证后续页能继续写入，先把 PDF 页数补齐（避免页数错位）
+        // 若为第 1 页 且已 addPage/未 addPage，直接什么都不做；其它页面补个 addPage 占位
+        if (i > 0) {
+          try {
+            pdf.setTextColor(198, 40, 40);
+            pdf.setFontSize(11);
+            pdf.text(`[渲染失败] ${date}: ${pageErr.message || pageErr}`, MARGIN_MM + 2, MARGIN_MM + 10);
+          } catch (_) {}
+          try { pdf.addPage(); } catch (_) {}
+        } else {
+          try {
+            pdf.setTextColor(198, 40, 40);
+            pdf.setFontSize(11);
+            pdf.text(`[首页渲染失败] ${date}: ${pageErr.message || pageErr}`, MARGIN_MM + 2, MARGIN_MM + 10);
+          } catch (_) {}
+        }
       }
-      const x = MARGIN_MM + (CONTENT_W_MM - drawWmm) / 2;
-      const y = MARGIN_MM + (CONTENT_H_MM - drawHmm) / 2;
-
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
-      pdf.addImage(dataUrl, 'JPEG', x, y, drawWmm, drawHmm, undefined, 'FAST');
     }
 
     const fileDate = (dates.length > 1 ? `${dates[0]}-${dates[dates.length - 1]}` : dates[0]);
-    pdf.save(`SCC-Patrol-Record_${fileDate}.pdf`);
-    showSnackbar('PDF 已生成下载');
+    try {
+      pdf.save(`SCC-Patrol-Record_${fileDate}.pdf`);
+    } catch (saveErr) {
+      console.error('[PDF] save 失败:', saveErr);
+      showSnackbar('PDF 保存失败: ' + (saveErr && saveErr.message ? saveErr.message : saveErr));
+      throw saveErr;
+    }
+
+    if (failedDays === 0) {
+      showSnackbar(`PDF 已生成下载（${dates.length} 天）`);
+    } else {
+      const hint = errors.length ? errors.slice(0, 2).join('；') : '';
+      showSnackbar(`PDF 已下载，但 ${failedDays}/${dates.length} 天渲染失败: ${hint}`);
+    }
   }
 
   function exportRangeAsPDF(startStr, endStr) {
