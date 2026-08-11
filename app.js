@@ -1912,6 +1912,17 @@
       const rowBg = parseInt(row.hour) % 2 === 0 ? '#fafbfc' : '#ffffff';
       const rowIsBad = row.hasCrossed || row.noteHasText;
 
+      // ===== 异常行描边：最先画（在所有 cell 之前），这样后面的 cell fillRect 会把描边
+      // 向内的半宽自动覆盖掉，只在表格外侧露出 2px 边框 → 绝对不会盖文字/状态。
+      if (rowIsBad) {
+        ctx.save();
+        ctx.strokeStyle = badBorderColor;
+        ctx.lineWidth = 2 * S; // 4px 总宽 → 内外各 2px
+        // 标准坐标（中心对齐）：向内的 2px 会被后续 cell fillRect 吃掉
+        ctx.strokeRect(tableX, dataY, totalWidth * S, rh);
+        ctx.restore();
+      }
+
       // ===== 先画整行底色（奇偶区分），之后异常高亮 cell 直接覆盖在对应 cell 区域 =====
       // Hour cell 背景
       ctx.fillStyle = rowBg;
@@ -2002,16 +2013,7 @@
         gridX += ww;
       }
 
-      // ===== 异常行描边：hasCrossed || noteHasText → 在整行外描 2px badBorderColor =====
-      if (rowIsBad) {
-        ctx.save();
-        ctx.strokeStyle = badBorderColor;
-        ctx.lineWidth = 2 * S;
-        // 把 stroke 向外偏移避免压线
-        const halfLW = S; // 线宽一半
-        ctx.strokeRect(tableX + halfLW, dataY + halfLW, totalWidth * S - 2 * halfLW, rh - 2 * halfLW);
-        ctx.restore();
-      }
+      // ===== 异常行描边已在本行开头先画（避免盖内容），此处跳过 =====
 
       dataY += rh;
       } catch (_rowErr) {

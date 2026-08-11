@@ -927,6 +927,16 @@ ${css.styleTag}
       const rowBg = parseInt(row.hour) % 2 === 0 ? '#fafbfc' : '#ffffff';
       const rowIsBad = row.hasCrossed || row.noteHasText;
 
+      // ===== 异常行描边：最先画（在所有 cell 之前），后续 cell fillRect 会覆盖向内的 2px，
+      // 只露出表格外侧的 2px → 绝对不盖文字/状态。
+      if (rowIsBad) {
+        ctx.save();
+        ctx.strokeStyle = badBorderColor;
+        ctx.lineWidth = 2 * S;
+        ctx.strokeRect(tableX, dataY, totalWidth * S, rh);
+        ctx.restore();
+      }
+
       // Hour cell 背景 + 文字
       ctx.fillStyle = rowBg;
       ctx.fillRect(tableX, dataY, colWidths[0] * S, rh);
@@ -1007,15 +1017,7 @@ ${css.styleTag}
         gridX += ww;
       }
 
-      // ===== 异常行描边：hasCrossed || noteHasText → 在整行外描 2px badBorderColor =====
-      if (rowIsBad) {
-        ctx.save();
-        ctx.strokeStyle = badBorderColor;
-        ctx.lineWidth = 2 * S;
-        const halfLW = S;
-        ctx.strokeRect(tableX + halfLW, dataY + halfLW, totalWidth * S - 2 * halfLW, rh - 2 * halfLW);
-        ctx.restore();
-      }
+      // ===== 异常行描边已在本行开头先画（避免盖内容），此处跳过 =====
 
       dataY += rh;
       } catch (_rowErr) {
