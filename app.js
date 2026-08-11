@@ -1957,8 +1957,9 @@
   // 直接抛 canvas size exceeds the maximum supported size 错误。
   // =================================================================
   function _resizeCanvasToSafe(canvas) {
-    const SAFE_AREA = 16 * 1000 * 1000; // 16MPx，iOS Safari 相对稳定的上限
-    const SAFE_EDGE = 4096;
+    // 更保守的上限：主流移动端（尤其 iPhone Safari）+ 老浏览器安全上限
+    const SAFE_AREA = 8 * 1000 * 1000; // 8MPx
+    const SAFE_EDGE = 2048;
     const W = canvas.width, H = canvas.height;
     const maxEdge = Math.max(W, H);
     const area = W * H;
@@ -1973,33 +1974,64 @@
     off.height = nH;
     const octx = off.getContext('2d');
     octx.imageSmoothingEnabled = true;
-    octx.imageSmoothingQuality = 'high';
+    try { octx.imageSmoothingQuality = 'high'; } catch (_) {}
     octx.drawImage(canvas, 0, 0, nW, nH);
     return off;
   }
 
   function _canvasToBestDataURL(canvas, quality) {
-    let fmt = 'JPEG', url;
+    // jsPDF 2.x addImage format 需小写 jpeg/png
+    let fmt = 'jpeg', url;
     try {
       url = canvas.toDataURL('image/jpeg', quality);
     } catch (eJpeg) {
-      // 某些浏览器（尤其 iOS Safari 旧版）在某些 canvas 尺寸 / alpha 通道情况下
-      // 会在 toDataURL('image/jpeg') 抛 SecurityError / IndexSizeError，
-      // 这时切 PNG 格式兜底。
-      fmt = 'PNG';
+      fmt = 'png';
       try {
         url = canvas.toDataURL('image/png');
       } catch (ePng) {
-        // 再兜底：按 0.85 quality 再试 JPEG，仍不行就抛原错误
         try {
           url = canvas.toDataURL('image/jpeg', 0.85);
-          fmt = 'JPEG';
+          fmt = 'jpeg';
         } catch (_) {
           throw ePng;
         }
       }
     }
     return { fmt, url };
+  }
+
+  // 生成一个灰色"渲染失败占位小图"的 dataURL(png)，极端情况下 addImage 还是失败就放这个，
+  // 完全不含中文，避免走入 pdf.text 默认 Helvetica → 中文乱码。
+  function _makePlaceholderDataUrl(textLabel, wPx, hPx) {
+    try {
+      const c = document.createElement('canvas');
+      c.width = Math.max(300, wPx || 800);
+      c.height = Math.max(120, hPx || 300);
+      const g = c.getContext('2d');
+      g.fillStyle = '#f4f5f7';
+      g.fillRect(0, 0, c.width, c.height);
+      g.strokeStyle = '#b8bfc9';
+      g.lineWidth = 4;
+      g.strokeRect(8, 8, c.width - 16, c.height - 16);
+      g.fillStyle = '#5f6b7a';
+      g.font = 'bold 22px sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      // 只用 ASCII 英文，不引入中文，避免 jsPDF 默认字体乱码
+      const line1 = textLabel ? String(textLabel) : 'Page render failed';
+      const line2 = 'Please try again or reduce canvas height';
+      g.fillText(line1, c.width / 2, c.height / 2 - 16);
+      g.font = '14px sans-serif';
+      g.fillStyle = '#8892a0';
+      g.fillText(line2, c.width / 2, c.height / 2 + 16);
+      return { fmt: 'png', url: c.toDataURL('image/png') };
+    } catch (_) {
+      // 最坏兜底：返回 1x1 透明 png dataURL(base64) 手写
+      return {
+        fmt: 'png',
+        url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+      };
+    }
   }
 
   async function exportRangeViaCanvasPDF(dates) {
@@ -2085,42 +2117,64 @@
 
         const { fmt, url } = _canvasToBestDataURL(canvas, 0.92);
 
+        // 把真实的图片尺寸转成像素 → 等会画占位小图时按比例给出大小
+        const wPxEst = Math.max(300, Math.round(drawWmm * 3.2));
+        const hPxEst = Math.max(150, Math.round(drawHmm * 3.2));
+
         try {
+          // 注意：不要显式传 undefined 做 alias，部分 jspdf 2.x 构建对此敏感；
+          // 同时 format 一律小写 (jpeg/png)。
           pdf.addImage(url, fmt, x, y, drawWmm, drawHmm, undefined, 'FAST');
         } catch (imgErr) {
-          // FAST / 指定格式失败 → 切 MEDIUM + 强制 PNG 再试一次，尽量不让整页失败
+          // 第一次失败：去掉 alias 参数 + 切 MEDIUM 再试
           try {
-            const pngFallback = fmt === 'PNG' ? url : canvas.toDataURL('image/png');
-            pdf.addImage(pngFallback, 'PNG', x, y, drawWmm, drawHmm, undefined, 'MEDIUM');
-          } catch (imgErr2) {
-            // 还失败 → 在本页写一行占位错误文字，保证 PDF 至少能保存下来
+            pdf.addImage(url, fmt, x, y, drawWmm, drawHmm);
+          } catch (imgErr1) {
+            // 第二次失败：强制 png（如果原本是 jpeg）再尝试 png 直接不带 compression
             try {
-              pdf.setTextColor(198, 40, 40);
-              pdf.setFontSize(11);
-              pdf.text(`[渲染失败] ${date}: ${imgErr2 && imgErr2.message || imgErr2 || 'addImage error'}`, MARGIN_MM + 2, MARGIN_MM + 10);
-            } catch (_) {}
-            throw new Error('页面图片写入失败: ' + (imgErr2 && imgErr2.message || imgErr2));
+              const pngFallback = fmt === 'png' ? url : canvas.toDataURL('image/png');
+              pdf.addImage(pngFallback, 'png', x, y, drawWmm, drawHmm);
+            } catch (imgErr2) {
+              // 终极兜底：用占位灰色小图（图片本身就是 canvas 再 toDataURL(png) 写进去，
+              // 文字是英文 + sans-serif 直接 rasterize，不会走 jsPDF 内置字体，不会乱码）
+              try {
+                const pl = _makePlaceholderDataUrl('Page render failed - ' + date, wPxEst, hPxEst);
+                pdf.addImage(pl.url, 'png', x, y, drawWmm, drawHmm);
+              } catch (imgErr3) {
+                // 再不行：1x1 透明 png，至少 save() 不要崩
+                try {
+                  pdf.addImage(
+                    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+                    'png', x, y, drawWmm, drawHmm
+                  );
+                } catch (_) {}
+                throw new Error('addImage fallback failed: ' + (imgErr3 && imgErr3.message || imgErr3));
+              }
+              throw new Error('页面图片写入失败 (fallback to placeholder): ' + (imgErr2 && imgErr2.message || imgErr2));
+            }
           }
         }
       } catch (pageErr) {
         failedDays++;
         errors.push(`${date}: ${pageErr.message || pageErr}`);
         console.error(`[PDF] ${date} 页面生成失败:`, pageErr);
-        // 出错也要保证后续页能继续写入，先把 PDF 页数补齐（避免页数错位）
-        // 若为第 1 页 且已 addPage/未 addPage，直接什么都不做；其它页面补个 addPage 占位
+        // 错误兜底：绝对不再调用 pdf.text 写中文 → Helvetica 无 CJK → 乱码
+        // 直接补 addPage，占位一张灰图，保证 PDF 结构完整
+        try {
+          const ratio = CONTENT_W_MM / CONTENT_H_MM;
+          let drawWmm = CONTENT_W_MM;
+          let drawHmm = drawWmm / ratio;
+          if (drawHmm > CONTENT_H_MM) { drawHmm = CONTENT_H_MM; drawWmm = drawHmm * ratio; }
+          const xp = MARGIN_MM + (CONTENT_W_MM - drawWmm) / 2;
+          const yp = MARGIN_MM + (CONTENT_H_MM - drawHmm) / 2;
+          const pl = _makePlaceholderDataUrl('Render failed for ' + date,
+            Math.max(300, Math.round(drawWmm * 3.2)),
+            Math.max(150, Math.round(drawHmm * 3.2)));
+          pdf.addImage(pl.url, 'png', xp, yp, drawWmm, drawHmm);
+        } catch (_) {}
+        // 再补页：避免下一页因为我们这一页没 addImage 导致写错位
         if (i > 0) {
-          try {
-            pdf.setTextColor(198, 40, 40);
-            pdf.setFontSize(11);
-            pdf.text(`[渲染失败] ${date}: ${pageErr.message || pageErr}`, MARGIN_MM + 2, MARGIN_MM + 10);
-          } catch (_) {}
           try { pdf.addPage(); } catch (_) {}
-        } else {
-          try {
-            pdf.setTextColor(198, 40, 40);
-            pdf.setFontSize(11);
-            pdf.text(`[首页渲染失败] ${date}: ${pageErr.message || pageErr}`, MARGIN_MM + 2, MARGIN_MM + 10);
-          } catch (_) {}
         }
       }
     }
@@ -2236,9 +2290,17 @@
     const dateLabel = `${date} ${weekdays[dateObj.getUTCDay()]}`;
     const { thead: pdfThead, colgroup, totalWidth, orderedCats, hasParents, headerRows, effPid, noWrapBase } = buildPDFTableHeader(1020);
     const css = buildPrintCSSBase(totalWidth);
+    // ===== 颜色注入（保证 PDF/打印 生效）=====
+    const highlightColor = settings.highlightColor || '#ffeb3b';
+    const badBorderColor = settings.rowBadBorderColor || '#d32f2f';
+    const badBorderStyle = `box-shadow: inset 0 0 0 2px ${badBorderColor};`;
 
     let rowsHTML = '';
     hours.forEach(row => {
+      const rowBg = parseInt(row.hour) % 2 === 0 ? '#fafbfc' : '#ffffff';
+      const rowIsBad = row.hasCrossed || row.noteHasText;
+      const rowBadBorder = rowIsBad ? badBorderStyle : '';
+
       let statusCells = '';
       orderedCats.forEach((cat, ci) => {
         const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
@@ -2248,21 +2310,28 @@
           const key = sub.id;
           const ed = row.entries[cat.id] ? row.entries[cat.id][key] : null;
           const status = ed ? ed.status : '';
+          const mapKey = cat.id + '::' + key;
+          const oorInfo = row.entryOorMap && row.entryOorMap[mapKey];
+          const oorBg = oorInfo && oorInfo.oor ? `background:${highlightColor};` : '';
           const div = (subi === 0 && isNewGroup) ? 'border-left:3px solid #1976d2;' : '';
           const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-          statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${div}${noWrapBase}">${status || ''}</td>`;
+          statusCells += `<td style="border:1px solid #333;padding:6px 3px;text-align:center;font-size:14px;color:${color};${oorBg}${div}${rowBadBorder}${noWrapBase}">${status || ''}</td>`;
         });
       });
 
       const timeStr = getLatestTimeString(row);
-      const note = (row.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const rowClass = parseInt(row.hour) % 2 === 0 ? 'background:#fafbfc;' : '';
+      const note = (row.note || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\r?\n/g, '<br>');
+      const hourBg = row.timeOor ? `background:${highlightColor};` : '';
+      const noteBg = row.noteOor ? `background:${highlightColor};` : '';
+      const timeBg = row.timeOor ? `background:${highlightColor};` : '';
 
-      rowsHTML += `<tr style="${rowClass}">
-        <td style="border:1px solid #333;padding:6px 8px;font-weight:bold;font-size:13px;color:#1976d2;${noWrapBase}">${row.hour}:00</td>
+      rowsHTML += `<tr style="background:${rowBg};">
+        <td style="border:1px solid #333;padding:6px 8px;font-weight:bold;font-size:13px;color:#1976d2;${hourBg}${rowBadBorder}${noWrapBase}">${row.hour}:00</td>
         ${statusCells}
-        <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:12px;word-break:break-word;white-space:normal;">${note}</td>
-        <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${noWrapBase}">${timeStr}</td>
+        <td class="note-cell" style="border:1px solid #333;padding:6px;font-size:13px;line-height:1.5;word-break:break-word;white-space:pre-wrap;vertical-align:top;${noteBg}${rowBadBorder}">${note}</td>
+        <td style="border:1px solid #333;padding:6px;font-size:12px;color:#666;text-align:right;${timeBg}${rowBadBorder}${noWrapBase}">${timeStr}</td>
       </tr>`;
     });
 

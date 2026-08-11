@@ -967,8 +967,8 @@ ${css.styleTag}
   // iOS Safari / 部分 Chrome GPU 进程在 toDataURL 阶段直接报错。
   // =================================================================
   function _resizeCanvasToSafe(canvas) {
-    const SAFE_AREA = 16 * 1000 * 1000;
-    const SAFE_EDGE = 4096;
+    const SAFE_AREA = 8 * 1000 * 1000;
+    const SAFE_EDGE = 2048;
     const W = canvas.width, H = canvas.height;
     const maxEdge = Math.max(W, H);
     const area = W * H;
@@ -983,29 +983,59 @@ ${css.styleTag}
     off.height = nH;
     const octx = off.getContext('2d');
     octx.imageSmoothingEnabled = true;
-    octx.imageSmoothingQuality = 'high';
+    try { octx.imageSmoothingQuality = 'high'; } catch (_) {}
     octx.drawImage(canvas, 0, 0, nW, nH);
     return off;
   }
 
   function _canvasToBestDataURL(canvas, quality) {
-    let fmt = 'JPEG', url;
+    let fmt = 'jpeg', url;
     try {
       url = canvas.toDataURL('image/jpeg', quality);
     } catch (eJpeg) {
-      fmt = 'PNG';
+      fmt = 'png';
       try {
         url = canvas.toDataURL('image/png');
       } catch (ePng) {
         try {
           url = canvas.toDataURL('image/jpeg', 0.85);
-          fmt = 'JPEG';
+          fmt = 'jpeg';
         } catch (_) {
           throw ePng;
         }
       }
     }
     return { fmt, url };
+  }
+
+  function _makePlaceholderDataUrl(textLabel, wPx, hPx) {
+    try {
+      const c = document.createElement('canvas');
+      c.width = Math.max(300, wPx || 800);
+      c.height = Math.max(120, hPx || 300);
+      const g = c.getContext('2d');
+      g.fillStyle = '#f4f5f7';
+      g.fillRect(0, 0, c.width, c.height);
+      g.strokeStyle = '#b8bfc9';
+      g.lineWidth = 4;
+      g.strokeRect(8, 8, c.width - 16, c.height - 16);
+      g.fillStyle = '#5f6b7a';
+      g.font = 'bold 22px sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      const line1 = textLabel ? String(textLabel) : 'Page render failed';
+      const line2 = 'Please try again or reduce canvas height';
+      g.fillText(line1, c.width / 2, c.height / 2 - 16);
+      g.font = '14px sans-serif';
+      g.fillStyle = '#8892a0';
+      g.fillText(line2, c.width / 2, c.height / 2 + 16);
+      return { fmt: 'png', url: c.toDataURL('image/png') };
+    } catch (_) {
+      return {
+        fmt: 'png',
+        url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+      };
+    }
   }
 
   async function exportRangeViaCanvasPDF(dates) {
@@ -1089,38 +1119,53 @@ ${css.styleTag}
 
         const { fmt, url } = _canvasToBestDataURL(canvas, 0.92);
 
+        const wPxEst = Math.max(300, Math.round(drawWmm * 3.2));
+        const hPxEst = Math.max(150, Math.round(drawHmm * 3.2));
+
         try {
           pdf.addImage(url, fmt, x, y, drawWmm, drawHmm, undefined, 'FAST');
         } catch (imgErr) {
           try {
-            const pngFallback = fmt === 'PNG' ? url : canvas.toDataURL('image/png');
-            pdf.addImage(pngFallback, 'PNG', x, y, drawWmm, drawHmm, undefined, 'MEDIUM');
-          } catch (imgErr2) {
+            pdf.addImage(url, fmt, x, y, drawWmm, drawHmm);
+          } catch (imgErr1) {
             try {
-              pdf.setTextColor(198, 40, 40);
-              pdf.setFontSize(11);
-              pdf.text(`[渲染失败] ${date}: ${imgErr2 && imgErr2.message || imgErr2 || 'addImage error'}`, MARGIN_MM + 2, MARGIN_MM + 10);
-            } catch (_) {}
-            throw new Error('页面图片写入失败: ' + (imgErr2 && imgErr2.message || imgErr2));
+              const pngFallback = fmt === 'png' ? url : canvas.toDataURL('image/png');
+              pdf.addImage(pngFallback, 'png', x, y, drawWmm, drawHmm);
+            } catch (imgErr2) {
+              try {
+                const pl = _makePlaceholderDataUrl('Page render failed - ' + date, wPxEst, hPxEst);
+                pdf.addImage(pl.url, 'png', x, y, drawWmm, drawHmm);
+              } catch (imgErr3) {
+                try {
+                  pdf.addImage(
+                    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+                    'png', x, y, drawWmm, drawHmm
+                  );
+                } catch (_) {}
+                throw new Error('addImage fallback failed: ' + (imgErr3 && imgErr3.message || imgErr3));
+              }
+              throw new Error('页面图片写入失败 (fallback to placeholder): ' + (imgErr2 && imgErr2.message || imgErr2));
+            }
           }
         }
       } catch (pageErr) {
         failedDays++;
         errors.push(`${date}: ${pageErr.message || pageErr}`);
         console.error(`[PDF] ${date} 页面生成失败:`, pageErr);
+        try {
+          const ratio = CONTENT_W_MM / CONTENT_H_MM;
+          let drawWmm = CONTENT_W_MM;
+          let drawHmm = drawWmm / ratio;
+          if (drawHmm > CONTENT_H_MM) { drawHmm = CONTENT_H_MM; drawWmm = drawHmm * ratio; }
+          const xp = MARGIN_MM + (CONTENT_W_MM - drawWmm) / 2;
+          const yp = MARGIN_MM + (CONTENT_H_MM - drawHmm) / 2;
+          const pl = _makePlaceholderDataUrl('Render failed for ' + date,
+            Math.max(300, Math.round(drawWmm * 3.2)),
+            Math.max(150, Math.round(drawHmm * 3.2)));
+          pdf.addImage(pl.url, 'png', xp, yp, drawWmm, drawHmm);
+        } catch (_) {}
         if (i > 0) {
-          try {
-            pdf.setTextColor(198, 40, 40);
-            pdf.setFontSize(11);
-            pdf.text(`[渲染失败] ${date}: ${pageErr.message || pageErr}`, MARGIN_MM + 2, MARGIN_MM + 10);
-          } catch (_) {}
           try { pdf.addPage(); } catch (_) {}
-        } else {
-          try {
-            pdf.setTextColor(198, 40, 40);
-            pdf.setFontSize(11);
-            pdf.text(`[首页渲染失败] ${date}: ${pageErr.message || pageErr}`, MARGIN_MM + 2, MARGIN_MM + 10);
-          } catch (_) {}
         }
       }
     }
