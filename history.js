@@ -631,7 +631,48 @@ ${css.styleTag}
     const colWidths = rawWidths.map(w => Math.round(w * fitScale));
     const totalWidth = colWidths.reduce((a, b) => a + b, 0);
 
+    if (!isFinite(totalWidth) || totalWidth < 100 || colWidths.length < 4 || colWidths.some(w => typeof w !== 'number' || !isFinite(w) || w <= 0)) {
+      return _getPDFTableMeta_FALLBACK4COL();
+    }
+
     return { parents, hasParents, groups, orderedCats, colWidths, colHeaders, totalWidth, effPid };
+  }
+
+  function _getPDFTableMeta_FALLBACK4COL() {
+    const W = [80, 120, 340, 85];
+    return {
+      hasParents: false,
+      groups: [],
+      orderedCats: [],
+      colWidths: W,
+      totalWidth: W.reduce((a, b) => a + b, 0),
+      effPid: function () { return null; },
+      parents: [],
+      colHeaders: ['时间', '状态', 'Note', '填入']
+    };
+  }
+
+  function _makeFallbackCanvas(date, reason) {
+    const S = 2;
+    const W = 1100 * S, H = 420 * S;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#e3f2fd'; g.fillRect(10 * S, 10 * S, W - 20 * S, 20 * S);
+    g.fillStyle = '#1565c0';
+    try { g.font = `bold ${12 * S}px -apple-system, "Microsoft YaHei", sans-serif`; } catch (_) { g.font = `bold ${12 * S}px sans-serif`; }
+    g.textAlign = 'left'; g.textBaseline = 'top';
+    try { g.fillText('Date: ' + date + ' (GMT)', 20 * S, 14 * S); } catch (_) {}
+    const bx = 20 * S, by = 50 * S, bw = W - 40 * S, bh = H - 90 * S;
+    g.fillStyle = '#fff8e1'; g.fillRect(bx, by, bw, bh);
+    g.strokeStyle = '#c5a800'; g.lineWidth = 2; g.strokeRect(bx, by, bw, bh);
+    g.fillStyle = '#5d4e37';
+    try { g.font = `bold ${15 * S}px -apple-system, "Microsoft YaHei", sans-serif`; } catch (_) { g.font = `bold ${15 * S}px sans-serif`; }
+    g.textAlign = 'center';
+    try { g.fillText('Table rendered in fallback layout (no categories or canvas safe)', W / 2, by + 40 * S); } catch (_) {}
+    if (reason) { try { g.fillText(String(reason).slice(0, 200), W / 2, by + 100 * S); } catch (_) {} }
+    return c;
   }
 
   function _getLatestTimeString(row) {
@@ -648,7 +689,9 @@ ${css.styleTag}
   }
 
   function _drawDayToCanvas(date, data, showTitle, titleText, subtitleText) {
-    const meta = _getPDFTableMeta();
+    try {
+      if (!Array.isArray(data)) data = [];
+      const meta = _getPDFTableMeta();
     const { orderedCats, colWidths, colHeaders, totalWidth, hasParents, groups, effPid } = meta;
 
     // Layout constants (in canvas pixels, scale=2 for sharpness)
@@ -663,38 +706,51 @@ ${css.styleTag}
     const tmpCanvas = document.createElement('canvas');
     const tmpCtx = tmpCanvas.getContext('2d');
     tmpCtx.font = `${noteFontSize}px -apple-system, "Microsoft YaHei", sans-serif`;
-    const noteColW = colWidths[colWidths.length - 2];
+    const noteColW = Number(colWidths[colWidths.length - 2]) || 340;
     const noteInnerW = noteColW * S - 2 * padX;
 
+    const MAX_NOTE_LINES = 50;
     function wrapNoteText(text) {
-      if (!text) return [];
-      const lines = [];
-      const paragraphs = String(text).split(/\r?\n/);
-      paragraphs.forEach(para => {
-        if (!para) { lines.push(''); return; }
-        let cur = '';
-        for (let i = 0; i < para.length; i++) {
-          const ch = para[i];
-          const tryStr = cur + ch;
-          if (tmpCtx.measureText(tryStr).width > noteInnerW && cur) {
-            lines.push(cur);
-            cur = ch;
-          } else {
-            cur = tryStr;
+      try {
+        if (!text) return [];
+        const lines = [];
+        const paragraphs = String(text).split(/\r?\n/);
+        paragraphs.forEach(para => {
+          if (!para) { lines.push(''); return; }
+          let cur = '';
+          for (let i = 0; i < para.length; i++) {
+            const ch = para[i];
+            const tryStr = cur + ch;
+            if (tmpCtx.measureText(tryStr).width > noteInnerW && cur) {
+              lines.push(cur);
+              cur = ch;
+            } else {
+              cur = tryStr;
+            }
+            if (lines.length >= MAX_NOTE_LINES) return;
           }
-        }
-        if (cur) lines.push(cur);
-      });
-      return lines;
+          if (cur) lines.push(cur);
+          if (lines.length >= MAX_NOTE_LINES) return;
+        });
+        if (lines.length > MAX_NOTE_LINES) lines.length = MAX_NOTE_LINES;
+        return lines;
+      } catch (e) {
+        return [];
+      }
     }
 
     const rowHeights = [];
     const rowNoteLines = [];
+    const DATA_H_CAP = 3200;
+    let runningH = 0;
     data.forEach(row => {
       const lines = wrapNoteText(row.note || '');
       rowNoteLines.push(lines);
       const noteNeeded = 2 * padY + Math.max(1, lines.length) * noteLineH;
-      rowHeights.push(Math.max(baseRowH, noteNeeded));
+      let rh = Math.max(baseRowH, noteNeeded);
+      if (runningH + rh > DATA_H_CAP) rh = Math.max(baseRowH, DATA_H_CAP - runningH);
+      runningH += rh;
+      rowHeights.push(Math.max(baseRowH, rh | 0));
     });
 
     const tableH = headerH + rowHeights.reduce((s, h) => s + h, 0);
@@ -704,6 +760,10 @@ ${css.styleTag}
     topH += 22 * S + 6 * S;
     const totalCanvasW = totalWidth * S + 20 * S;
     const totalCanvasH = topH + tableH + 10 * S;
+
+    if (totalCanvasW > 4090 || totalCanvasH > 4090 || !isFinite(totalCanvasW) || !isFinite(totalCanvasH)) {
+      return _makeFallbackCanvas(date, 'Canvas size capped: W=' + Math.round(totalCanvasW) + ' H=' + Math.round(totalCanvasH));
+    }
 
     const canvas = document.createElement('canvas');
     canvas.width = totalCanvasW;
@@ -861,8 +921,9 @@ ${css.styleTag}
     let dataY = headerY + r1H + 4 * S;
 
     data.forEach((row, rIdx) => {
-      const rh = rowHeights[rIdx];
-      const noteLines = rowNoteLines[rIdx];
+      try {
+      const rh = Number(rowHeights[rIdx]) || baseRowH;
+      const noteLines = rowNoteLines[rIdx] || [];
       const rowBg = parseInt(row.hour) % 2 === 0 ? '#fafbfc' : '#ffffff';
       const rowIsBad = row.hasCrossed || row.noteHasText;
 
@@ -957,9 +1018,26 @@ ${css.styleTag}
       }
 
       dataY += rh;
+      } catch (_rowErr) {
+        try {
+          const rhFb = Number(rowHeights[rIdx]) || baseRowH;
+          ctx.strokeStyle = '#b71c1c';
+          ctx.fillStyle = '#ffebee';
+          ctx.fillRect(tableX, dataY, totalWidth * S, rhFb);
+          ctx.strokeRect(tableX, dataY, totalWidth * S, rhFb);
+          dataY += rhFb;
+        } catch (_) {}
+      }
     });
 
     return canvas;
+    } catch (topErr) {
+      try { if (console && console.error) console.error('[PDF] _drawDayToCanvas fatal:', topErr); } catch (_) {}
+      try { return _makeFallbackCanvas(date, topErr && topErr.message ? topErr.message : 'unknown'); } catch (_) {
+        const c = document.createElement('canvas'); c.width = 200; c.height = 200;
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0,0,200,200); return c;
+      }
+    }
   }
 
   // =================================================================
