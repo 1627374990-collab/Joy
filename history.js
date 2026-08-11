@@ -175,7 +175,13 @@
     const hours = [];
     for (let h = 0; h < HOURS; h++) {
       const hourStr = String(h).padStart(2, '0');
-      const hourData = day[hourStr] || {};
+      const hourNumKey = String(h);
+      // 双 key 合并：同时兼容 records[date]['07'] 与 records[date]['7']
+      const hourData = Object.assign(
+        {},
+        (day && day[hourNumKey]) || {},
+        (day && day[hourStr]) || {}
+      );
       const meta = hourData._meta || { note: '', noteTimestamp: null };
 
       const row = {
@@ -921,115 +927,132 @@ ${css.styleTag}
     let dataY = headerY + r1H + 4 * S;
 
     data.forEach((row, rIdx) => {
-      try {
       const rh = Number(rowHeights[rIdx]) || baseRowH;
       const noteLines = rowNoteLines[rIdx] || [];
       const rowBg = parseInt(row.hour) % 2 === 0 ? '#fafbfc' : '#ffffff';
-      const rowIsBad = row.hasCrossed || row.noteHasText;
+      const rowIsBad = !!(row.hasCrossed || row.noteHasText);
 
-      // ===== 异常行描边：最先画（在所有 cell 之前），后续 cell fillRect 会覆盖向内的 2px，
-      // 只露出表格外侧的 2px → 绝对不盖文字/状态。
       if (rowIsBad) {
-        ctx.save();
-        ctx.strokeStyle = badBorderColor;
-        ctx.lineWidth = 2 * S;
-        ctx.strokeRect(tableX, dataY, totalWidth * S, rh);
-        ctx.restore();
-      }
-
-      // Hour cell 背景 + 文字
-      ctx.fillStyle = rowBg;
-      ctx.fillRect(tableX, dataY, colWidths[0] * S, rh);
-      ctx.fillStyle = '#1976d2';
-      ctx.font = `bold ${11 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.fillText(row.hour + ':00', tableX + colWidths[0] * S / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
-      if (row.timeOor) {
-        ctx.fillStyle = highlightColor;
-        ctx.fillRect(tableX, dataY, colWidths[0] * S, rh);
-        ctx.fillStyle = '#1976d2';
-        ctx.fillText(row.hour + ':00', tableX + colWidths[0] * S / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
-      }
-
-      let dx = tableX + colWidths[0] * S;
-
-      colIdx = 1;
-      orderedCats.forEach(cat => {
-        const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
-        subs.forEach(sub => {
-          const w = colWidths[colIdx] * S;
-          const mapKey = cat.id + '::' + (sub ? sub.id : '_main');
-          const oorInfo = row.entryOorMap[mapKey];
-          const ed = row.entries[cat.id] ? row.entries[cat.id][sub ? sub.id : '_main'] : null;
-          const status = ed ? ed.status : '';
-          ctx.fillStyle = rowBg;
-          ctx.fillRect(dx, dataY, w, rh);
-          if (oorInfo && oorInfo.oor) {
-            ctx.fillStyle = highlightColor;
-            ctx.fillRect(dx + 1, dataY + 1, w - 2, rh - 2);
-          }
-          const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
-          ctx.fillStyle = color;
-          ctx.font = `bold ${12 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
-          ctx.textAlign = 'center';
-          if (status) ctx.fillText(status, dx + w / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
-          dx += w;
-          colIdx++;
-        });
-      });
-
-      const nw = colWidths[colWidths.length - 2] * S;
-      ctx.fillStyle = rowBg;
-      ctx.fillRect(dx, dataY, nw, rh);
-      if (row.noteOor) {
-        ctx.fillStyle = highlightColor;
-        ctx.fillRect(dx + 1, dataY + 1, nw - 2, rh - 2);
-      }
-      ctx.fillStyle = '#333';
-      ctx.font = `${noteFontSize}px -apple-system, "Microsoft YaHei", sans-serif`;
-      ctx.textAlign = 'left';
-      const lines = noteLines || [];
-      for (let li = 0; li < lines.length; li++) {
-        const lineY = dataY + padY + (li + 1) * noteLineH;
-        ctx.fillText(lines[li], dx + padX, lineY);
-      }
-
-      const tw = colWidths[colWidths.length - 1] * S;
-      ctx.fillStyle = rowBg;
-      ctx.fillRect(dx, dataY, tw, rh);
-      if (row.timeOor) {
-        ctx.fillStyle = highlightColor;
-        ctx.fillRect(dx + 1, dataY + 1, tw - 2, rh - 2);
-      }
-      ctx.fillStyle = '#666';
-      ctx.font = `${10 * S}px -apple-system, "Microsoft YaHei", sans-serif`;
-      ctx.textAlign = 'right';
-      const timeStr = _getLatestTimeString(row);
-      ctx.fillText(timeStr, dx + tw - padX, dataY + Math.min(rh / 2, baseRowH / 2) + 3 * S);
-
-      // 绘制整行网格边框
-      ctx.strokeStyle = '#333';
-      ctx.lineWidth = 1 * S;
-      let gridX = tableX;
-      for (let i = 0; i < colWidths.length; i++) {
-        const ww = colWidths[i] * S;
-        ctx.strokeRect(gridX, dataY, ww, rh);
-        gridX += ww;
-      }
-
-      // ===== 异常行描边已在本行开头先画（避免盖内容），此处跳过 =====
-
-      dataY += rh;
-      } catch (_rowErr) {
         try {
-          const rhFb = Number(rowHeights[rIdx]) || baseRowH;
-          ctx.strokeStyle = '#b71c1c';
-          ctx.fillStyle = '#ffebee';
-          ctx.fillRect(tableX, dataY, totalWidth * S, rhFb);
-          ctx.strokeRect(tableX, dataY, totalWidth * S, rhFb);
-          dataY += rhFb;
+          ctx.save();
+          ctx.strokeStyle = badBorderColor;
+          ctx.lineWidth = 2 * S;
+          ctx.strokeRect(tableX, dataY, totalWidth * S, rh);
+          ctx.restore();
         } catch (_) {}
       }
+
+      // Hour cell
+      const cw0 = Number(colWidths[0]) || 80;
+      try {
+        ctx.fillStyle = rowBg;
+        ctx.fillRect(tableX, dataY, cw0 * S, rh);
+        ctx.fillStyle = '#1976d2';
+        try { ctx.font = `bold ${11 * S}px -apple-system, "Microsoft YaHei", sans-serif`; } catch (_) { ctx.font = `bold ${11 * S}px sans-serif`; }
+        ctx.textAlign = 'center';
+        const hTxt = (row.hour != null ? String(row.hour) : String(rIdx).padStart(2, '0')) + ':00';
+        ctx.fillText(hTxt, tableX + cw0 * S / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
+        if (row.timeOor) {
+          ctx.fillStyle = highlightColor;
+          ctx.fillRect(tableX, dataY, cw0 * S, rh);
+          ctx.fillStyle = '#1976d2';
+          ctx.fillText(hTxt, tableX + cw0 * S / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
+        }
+      } catch (_) {}
+
+      let dx = tableX + cw0 * S;
+
+      let ci = 1;
+      try {
+        orderedCats.forEach(cat => {
+          const subs = cat.subStatuses && cat.subStatuses.length > 0 ? cat.subStatuses : [{ id: '_main' }];
+          subs.forEach(sub => {
+            const rawW = Number(colWidths[ci]);
+            if (!isFinite(rawW) || rawW <= 0) { ci++; return; }
+            const w = rawW * S;
+            try {
+              const subKey = sub ? sub.id : '_main';
+              const mapKey = cat.id + '::' + subKey;
+              const oorInfo = row.entryOorMap ? row.entryOorMap[mapKey] : null;
+              const ed = row.entries && row.entries[cat.id] ? row.entries[cat.id][subKey] : null;
+              const status = ed ? (ed.status || '') : '';
+              ctx.fillStyle = rowBg;
+              ctx.fillRect(dx, dataY, w, rh);
+              if (oorInfo && oorInfo.oor) {
+                ctx.fillStyle = highlightColor;
+                ctx.fillRect(dx + 1, dataY + 1, Math.max(1, w - 2), Math.max(1, rh - 2));
+              }
+              if (status) {
+                const color = status === '✓' ? '#2e7d32' : status === '✗' ? '#c62828' : '#ccc';
+                ctx.fillStyle = color;
+                try { ctx.font = `bold ${12 * S}px -apple-system, "Microsoft YaHei", sans-serif`; } catch (_) { ctx.font = `bold ${12 * S}px sans-serif`; }
+                ctx.textAlign = 'center';
+                ctx.fillText(status, dx + w / 2, dataY + Math.min(rh / 2, baseRowH / 2) + 4 * S);
+              }
+            } catch (_) {}
+            dx += w;
+            ci++;
+          });
+        });
+      } catch (_) {}
+
+      // Note cell
+      try {
+        const nw = Number(colWidths[colWidths.length - 2]) * S;
+        ctx.fillStyle = rowBg;
+        ctx.fillRect(dx, dataY, nw, rh);
+        if (row.noteOor) {
+          ctx.fillStyle = highlightColor;
+          ctx.fillRect(dx + 1, dataY + 1, Math.max(1, nw - 2), Math.max(1, rh - 2));
+        }
+        const lines = noteLines || [];
+        if (lines.length > 0) {
+          ctx.fillStyle = '#333';
+          try { ctx.font = `${noteFontSize}px -apple-system, "Microsoft YaHei", sans-serif`; } catch (_) { ctx.font = `${noteFontSize}px sans-serif`; }
+          ctx.textAlign = 'left';
+          for (let li = 0; li < lines.length; li++) {
+            try {
+              const lineY = dataY + padY + (li + 1) * noteLineH;
+              if (lineY < dataY + rh - padY) ctx.fillText(lines[li], dx + padX, lineY);
+            } catch (_) {}
+          }
+        }
+        dx += nw;
+      } catch (_) {
+        dx += Number(colWidths[colWidths.length - 2]) * S;
+      }
+
+      // Time cell
+      try {
+        const tw = Number(colWidths[colWidths.length - 1]) * S;
+        ctx.fillStyle = rowBg;
+        ctx.fillRect(dx, dataY, tw, rh);
+        if (row.timeOor) {
+          ctx.fillStyle = highlightColor;
+          ctx.fillRect(dx + 1, dataY + 1, Math.max(1, tw - 2), Math.max(1, rh - 2));
+        }
+        ctx.fillStyle = '#666';
+        try { ctx.font = `${10 * S}px -apple-system, "Microsoft YaHei", sans-serif`; } catch (_) { ctx.font = `${10 * S}px sans-serif`; }
+        ctx.textAlign = 'right';
+        let timeStr = '';
+        try { timeStr = _getLatestTimeString(row); } catch (_) {}
+        if (timeStr) ctx.fillText(timeStr, dx + tw - padX, dataY + Math.min(rh / 2, baseRowH / 2) + 3 * S);
+      } catch (_) {}
+
+      // 网格
+      try {
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1 * S;
+        let gridX = tableX;
+        for (let i = 0; i < colWidths.length; i++) {
+          const ww = Number(colWidths[i]) * S;
+          if (!isFinite(ww) || ww <= 0) continue;
+          ctx.strokeRect(gridX, dataY, ww, rh);
+          gridX += ww;
+        }
+      } catch (_) {}
+
+      dataY += rh;
     });
 
     return canvas;
@@ -1276,7 +1299,19 @@ ${css.styleTag}
   }
 
   function exportRange(startStr, endStr) {
-    const dates = getDateRange(startStr, endStr);
+    // 安全兜底：如果用户选择的范围不含今天（纯过去），但今天有 records（说明今天填了记录），
+    // 很可能是「习惯选项没更新到今天」导致导出纯空白范围 → 强制 end ≥ today
+    let end = endStr;
+    try {
+      const today = formatDate(getNow());
+      const recKeys = Object.keys(records || {});
+      const hasTodayRecord = recKeys.indexOf(today) >= 0;
+      if (hasTodayRecord && endStr < today) {
+        end = today;
+      }
+    } catch (_) {}
+    const safeStart = startStr <= end ? startStr : end;
+    const dates = getDateRange(safeStart, end);
     showSnackbar(`正在生成 PDF (${dates.length} 天)...`);
     exportRangeViaCanvasPDF(dates).catch(err => {
       console.error(err);
