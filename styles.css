@@ -220,6 +220,32 @@ input, textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.clock-edit-panel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  background: #1a237e;
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-top: 4px;
+  font-size: 13px;
+  z-index: 100;
+}
+.clock-edit-panel.hidden { display: none; }
+.clock-edit-panel label { white-space: nowrap; }
+.clock-edit-panel input[type="number"] {
+  text-align: center;
+  font-size: 14px;
+  padding: 2px 4px;
+  border: 1px solid rgba(255,255,255,0.4);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.95);
+  color: #1a237e;
+}
+.clock-edit-panel .btn { font-size: 12px; padding: 2px 8px; }
+
 .icon-btn {
   font-size: 20px;
   padding: 4px 8px;

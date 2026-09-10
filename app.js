@@ -2570,8 +2570,8 @@ ${css.styleTag}
       const on = isAdminMode();
       document.documentElement.dataset.adminMode = on ? '1' : '0';
       // 管理者：给 html 一个样式钩子；主页面显示一个小徽章
-      const banner = document.getElementById('reminder-banner');
       updateClock(); // 刷新时钟显示的🛠徽章
+      if (!on) _hideClockEditPanel();
     };
     window._applyAdminModeToDOM();
   }
@@ -2608,6 +2608,10 @@ ${css.styleTag}
   // ===== Admin Mode (管理者模式) =====
   // 打开方式：连续点击右上角 GMT 时钟 3 下（每次间隔 <= 1.2s）。
   // 关闭同理（再连击3下）。
+  // 管理者模式开启后：时钟变为可调时间输入框（精确到秒），5 分钟后自动解除。
+  let _adminModeTimer = null;
+  const ADMIN_MODE_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟自动解除
+
   function isAdminMode() {
     try {
       return localStorage.getItem(STORAGE_KEY_ADMIN_MODE) === '1';
@@ -2615,25 +2619,216 @@ ${css.styleTag}
   }
   function setAdminMode(on) {
     try {
-      if (on) localStorage.setItem(STORAGE_KEY_ADMIN_MODE, '1');
-      else localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
+      if (on) {
+        localStorage.setItem(STORAGE_KEY_ADMIN_MODE, '1');
+        // 启动 5 分钟自动解除计时器
+        if (_adminModeTimer) clearTimeout(_adminModeTimer);
+        _adminModeTimer = setTimeout(() => {
+          setAdminMode(false);
+          showSnackbar('管理者模式已自动解除（5 分钟超时）');
+        }, ADMIN_MODE_TIMEOUT_MS);
+      } else {
+        localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
+        if (_adminModeTimer) { clearTimeout(_adminModeTimer); _adminModeTimer = null; }
+        _hideClockEditPanel();
+      }
     } catch (e) {}
     if (typeof _applyAdminModeToDOM === 'function') _applyAdminModeToDOM();
   }
+
+  // ===== 管理者模式：首页时钟可调时间（精确到秒）=====
+  let _clockEditPanel = null;
+  function _ensureClockEditPanel() {
+    if (_clockEditPanel) return _clockEditPanel;
+    const panel = document.createElement('div');
+    panel.id = 'clock-edit-panel';
+    panel.className = 'clock-edit-panel hidden';
+    panel.innerHTML = `
+      <label>GMT 时间:</label>
+      <input type="number" id="clock-edit-hh" min="0" max="23" placeholder="HH" style="width:42px"> :
+      <input type="number" id="clock-edit-mm" min="0" max="59" placeholder="MM" style="width:42px"> :
+      <input type="number" id="clock-edit-ss" min="0" max="59" placeholder="SS" style="width:42px">
+      <button id="clock-edit-apply" class="btn btn-sm btn-primary">设定</button>
+      <button id="clock-edit-reset" class="btn btn-sm btn-outline">恢复实时</button>
+      <button id="clock-edit-close" class="btn btn-sm">✕</button>
+    `;
+    // 插入到 header-actions 之后
+    const header = document.querySelector('.app-header');
+    if (header) header.appendChild(panel);
+    else document.body.appendChild(panel);
+
+    const hh = panel.querySelector('#clock-edit-hh');
+    const mm = panel.querySelector('#clock-edit-mm');
+    const ss = panel.querySelector('#clock-edit-ss');
+
+    panel.querySelector('#clock-edit-apply').addEventListener('click', () => {
+      const h = parseInt(hh.value, 10); const m = parseInt(mm.value, 10); const s = parseInt(ss.value, 10);
+      if (isNaN(h) || h < 0 || h > 23 || isNaN(m) || m < 0 || m > 59 || isNaN(s) || s < 0 || s > 59) {
+        showSnackbar('请输入有效时间 (HH:0-23 MM:0-59 SS:0-59)'); return;
+      }
+      const now = getNow();
+      const target = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m, s));
+      // 如果目标时间比现在还小超过 12 小时，说明想调到明天
+      const diff = target.getTime() - Date.now();
+      const offset = diff > -(12 * 3600 * 1000) ? diff : diff + 24 * 3600 * 1000;
+      try {
+        if (offset === 0) localStorage.removeItem(STORAGE_KEY_TIME_OFFSET);
+        else localStorage.setItem(STORAGE_KEY_TIME_OFFSET, String(offset));
+      } catch (e) {}
+      showSnackbar('已设定 GMT ' + String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0'));
+      updateClock();
+      renderAll(true);
+    });
+
+    panel.querySelector('#clock-edit-reset').addEventListener('click', () => {
+      try { localStorage.removeItem(STORAGE_KEY_TIME_OFFSET); } catch (e) {}
+      showSnackbar('已恢复实时时间');
+      updateClock();
+      renderAll(true);
+    });
+
+    panel.querySelector('#clock-edit-close').addEventListener('click', () => {
+      panel.classList.add('hidden');
+    });
+
+    _clockEditPanel = panel;
+    return panel;
+  }
+
+  function _showClockEditPanel() {
+    const panel = _ensureClockEditPanel();
+    const now = getNow();
+    panel.querySelector('#clock-edit-hh').value = String(now.getUTCHours()).padStart(2,'0');
+    panel.querySelector('#clock-edit-mm').value = String(now.getUTCMinutes()).padStart(2,'0');
+    panel.querySelector('#clock-edit-ss').value = String(now.getUTCSeconds()).padStart(2,'0');
+    panel.classList.remove('hidden');
+  }
+
+  function _hideClockEditPanel() {
+    const panel = document.getElementById('clock-edit-panel');
+    if (panel) panel.classList.add('hidden');
+  }
+
+  // ===== 自动打卡功能 =====
+  // 开启方式：点击时钟 5 下
+  // 效果：每个小时的容错时间窗口内，在随机时刻自动一键打卡
+  // 持续时间：4 小时
+  const STORAGE_KEY_AUTO_CHECKIN = 'status_auto_checkin_expiry_v1';
+  const AUTO_CHECKIN_DURATION_MS = 4 * 60 * 60 * 1000; // 4 小时
+  let _autoCheckinRandomOffsets = {}; // key: 'date_hour' → random offset in ms
+
+  function isAutoCheckinActive() {
+    try {
+      const expiry = parseInt(localStorage.getItem(STORAGE_KEY_AUTO_CHECKIN) || '0', 10);
+      if (!expiry) return false;
+      if (Date.now() >= expiry) {
+        localStorage.removeItem(STORAGE_KEY_AUTO_CHECKIN);
+        return false;
+      }
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function setAutoCheckin(on) {
+    try {
+      if (on) {
+        const expiry = Date.now() + AUTO_CHECKIN_DURATION_MS;
+        localStorage.setItem(STORAGE_KEY_AUTO_CHECKIN, String(expiry));
+        _autoCheckinRandomOffsets = {};
+        showSnackbar('自动打卡已开启，持续 4 小时');
+      } else {
+        localStorage.removeItem(STORAGE_KEY_AUTO_CHECKIN);
+        _autoCheckinRandomOffsets = {};
+        showSnackbar('自动打卡已关闭');
+      }
+    } catch (e) {}
+    updateClock();
+  }
+
+  function _getAutoCheckinRandomOffset(dateStr, hourStr) {
+    const key = dateStr + '_' + hourStr;
+    if (_autoCheckinRandomOffsets[key] != null) return _autoCheckinRandomOffsets[key];
+    const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
+    // 随机偏移在 [0, toleranceMs) 内
+    const rand = Math.floor(Math.random() * toleranceMs);
+    _autoCheckinRandomOffsets[key] = rand;
+    return rand;
+  }
+
+  function _tryAutoCheckin() {
+    if (!isAutoCheckinActive()) return;
+    const now = getNow();
+    const today = getGMTDateString(now);
+    const hourStr = getGMTHourString(now);
+    const date = getTodayDate();
+
+    const access = getHourAccessState(date, hourStr, now.getTime());
+    if (access === 'future') return;
+    if (access !== 'editable') return; // 只在容差内自动打卡
+
+    // 检查是否已打卡过
+    const autoKey = 'auto_checkin_done_' + date + '_' + hourStr;
+    try {
+      if (sessionStorage.getItem(autoKey) === '1') return;
+    } catch (e) {}
+
+    // 检查是否到了随机时刻
+    const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
+    const y = parseInt(date.slice(0, 4));
+    const mo = parseInt(date.slice(5, 7)) - 1;
+    const d = parseInt(date.slice(8, 10));
+    const h = parseInt(hourStr, 10);
+    const hourStart = new Date(Date.UTC(y, mo, d, h, 0, 0, 0)).getTime();
+    const elapsed = now.getTime() - hourStart;
+    const randOffset = _getAutoCheckinRandomOffset(date, hourStr);
+
+    if (elapsed < randOffset) return; // 还没到随机时刻
+
+    // 执行自动打卡
+    try {
+      const preset = getPresetTargets();
+      const status = preset.status || STATUS_CHECKED;
+      const targets = preset.targets;
+      const parentTargets = preset.parentTargets;
+      const count = fillRange(date, hourStr, hourStr, status, targets, parentTargets, now.getTime(), access);
+      sessionStorage.setItem(autoKey, '1');
+      if (count > 0) {
+        showSnackbar('自动打卡 ' + hourStr + ':00 (' + count + ' 项)');
+        renderAll(true);
+      }
+    } catch (e) {
+      // 静默失败，下个 tick 重试
+    }
+  }
+
   function bindAdminClockTripleClick() {
     const el = document.getElementById('gmt-clock');
     if (!el) return;
     el.style.cursor = 'pointer';
+    el.style.userSelect = 'none';
     let clicks = 0;
     let timer = null;
     function reset() { clicks = 0; if (timer) { clearTimeout(timer); timer = null; } }
     el.addEventListener('click', () => {
       clicks++;
       if (timer) clearTimeout(timer);
-      if (clicks >= 3) {
-        // 3连击：切换
+      // 3 连击：切换管理者模式
+      if (clicks === 3) {
+        const wasAdmin = isAdminMode();
         reset();
-        setAdminMode(!isAdminMode());
+        setAdminMode(!wasAdmin);
+        if (!wasAdmin) {
+          // 刚开启管理者模式：显示时间编辑面板
+          setTimeout(_showClockEditPanel, 100);
+        } else {
+          _hideClockEditPanel();
+        }
+        return;
+      }
+      // 5 连击：切换自动打卡
+      if (clicks >= 5) {
+        reset();
+        setAutoCheckin(!isAutoCheckinActive());
         return;
       }
       timer = setTimeout(reset, 1200);
@@ -2644,7 +2839,12 @@ ${css.styleTag}
   function updateClock() {
     const now = getNow();
     const el = document.getElementById('gmt-clock');
-    if (el) el.textContent = getGMTTimeString(now) + ' GMT' + (isAdminMode() ? ' 🛠' : '');
+    if (el) {
+      let suffix = '';
+      if (isAdminMode()) suffix += ' 🛠';
+      if (isAutoCheckinActive()) suffix += ' ⚡';
+      el.textContent = getGMTTimeString(now) + ' GMT' + suffix;
+    }
   }
 
   // ===== Reminder System =====
@@ -2682,6 +2882,9 @@ ${css.styleTag}
           }
         }
       }
+
+      // 自动打卡检测
+      try { _tryAutoCheckin(); } catch (e) {}
 
       // 整点时刻（仅一次，UTC 秒 0 ~ 8 窗口）跨到新小时时，执行 1 次 full 渲染重建表格
       if (now.getUTCSeconds() <= 8) {
