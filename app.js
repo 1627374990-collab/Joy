@@ -2631,6 +2631,8 @@ ${css.styleTag}
         localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
         if (_adminModeTimer) { clearTimeout(_adminModeTimer); _adminModeTimer = null; }
         _hideClockEditPanel();
+        // 退出管理员模式：清除时间偏移，时钟立刻恢复为实时时间
+        try { localStorage.removeItem(STORAGE_KEY_TIME_OFFSET); } catch (e) {}
       }
     } catch (e) {}
     if (typeof _applyAdminModeToDOM === 'function') _applyAdminModeToDOM();
