@@ -2748,10 +2748,20 @@ ${css.styleTag}
   function _getAutoCheckinRandomOffset(dateStr, hourStr) {
     const key = dateStr + '_' + hourStr;
     if (_autoCheckinRandomOffsets[key] != null) return _autoCheckinRandomOffsets[key];
+    // 持久化到 sessionStorage，避免刷新后随机偏移变化导致错过打卡窗口
+    const sKey = 'auto_checkin_offset_' + key;
+    try {
+      const stored = sessionStorage.getItem(sKey);
+      if (stored != null) {
+        const v = parseInt(stored, 10);
+        if (!isNaN(v)) { _autoCheckinRandomOffsets[key] = v; return v; }
+      }
+    } catch (e) {}
     const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
-    // 随机偏移在 [0, toleranceMs) 内
-    const rand = Math.floor(Math.random() * toleranceMs);
+    // 随机偏移在 [0, toleranceMs) 内，至少 5 秒保证不会太早
+    const rand = Math.max(5000, Math.floor(Math.random() * toleranceMs));
     _autoCheckinRandomOffsets[key] = rand;
+    try { sessionStorage.setItem(sKey, String(rand)); } catch (e) {}
     return rand;
   }
 
@@ -2812,26 +2822,25 @@ ${css.styleTag}
     el.addEventListener('click', () => {
       clicks++;
       if (timer) clearTimeout(timer);
-      // 3 连击：切换管理者模式
-      if (clicks === 3) {
-        const wasAdmin = isAdminMode();
-        reset();
-        setAdminMode(!wasAdmin);
-        if (!wasAdmin) {
-          // 刚开启管理者模式：显示时间编辑面板
-          setTimeout(_showClockEditPanel, 100);
-        } else {
-          _hideClockEditPanel();
-        }
-        return;
-      }
-      // 5 连击：切换自动打卡
+      // 5 连击：切换自动打卡（优先判断，到 5 下立即执行）
       if (clicks >= 5) {
         reset();
         setAutoCheckin(!isAutoCheckinActive());
         return;
       }
-      timer = setTimeout(reset, 1200);
+      // 超时处理：停在 3 下 → 切换管理者模式；其他数量 → 仅清零
+      timer = setTimeout(() => {
+        if (clicks === 3) {
+          const wasAdmin = isAdminMode();
+          setAdminMode(!wasAdmin);
+          if (!wasAdmin) {
+            setTimeout(_showClockEditPanel, 100);
+          } else {
+            _hideClockEditPanel();
+          }
+        }
+        reset();
+      }, 1200);
     });
   }
 
