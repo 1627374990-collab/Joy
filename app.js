@@ -2608,9 +2608,9 @@ ${css.styleTag}
   // ===== Admin Mode (管理者模式) =====
   // 打开方式：连续点击右上角 GMT 时钟 3 下（每次间隔 <= 1.2s）。
   // 关闭同理（再连击3下）。
-  // 管理者模式开启后：时钟变为可调时间输入框（精确到秒），5 分钟后自动解除。
+  // 管理者模式开启后：时钟变为可调时间输入框（精确到秒），20 分钟后自动解除。
   let _adminModeTimer = null;
-  const ADMIN_MODE_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟自动解除
+  const ADMIN_MODE_TIMEOUT_MS = 20 * 60 * 1000; // 20 分钟自动解除
 
   function isAdminMode() {
     try {
@@ -2621,11 +2621,11 @@ ${css.styleTag}
     try {
       if (on) {
         localStorage.setItem(STORAGE_KEY_ADMIN_MODE, '1');
-        // 启动 5 分钟自动解除计时器
+        // 启动 20 分钟自动解除计时器
         if (_adminModeTimer) clearTimeout(_adminModeTimer);
         _adminModeTimer = setTimeout(() => {
           setAdminMode(false);
-          showSnackbar('管理者模式已自动解除（5 分钟超时）');
+          showSnackbar('管理者模式已自动解除（20 分钟超时）');
         }, ADMIN_MODE_TIMEOUT_MS);
       } else {
         localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
@@ -2803,13 +2803,17 @@ ${css.styleTag}
       const targets = preset.targets;
       const parentTargets = preset.parentTargets;
       const count = fillRange(date, hourStr, hourStr, status, targets, parentTargets, now.getTime(), access);
-      sessionStorage.setItem(autoKey, '1');
+      // 只有实际填充了内容才标记为已完成，避免 count=0 时误标记导致漏打卡
       if (count > 0) {
+        try { sessionStorage.setItem(autoKey, '1'); } catch (e) {}
         showSnackbar('自动打卡 ' + hourStr + ':00 (' + count + ' 项)');
         renderAll(true);
+      } else {
+        // count=0：可能所有项已填或分类为空，仍标记完成避免每5秒重复尝试
+        try { sessionStorage.setItem(autoKey, '1'); } catch (e) {}
       }
     } catch (e) {
-      // 静默失败，下个 tick 重试
+      console.error('[AutoCheckin] fillRange error:', e);
     }
   }
 
