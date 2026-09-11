@@ -2609,27 +2609,35 @@ ${css.styleTag}
   // 打开方式：连续点击右上角 GMT 时钟 3 下（每次间隔 <= 1.2s）。
   // 关闭同理（再连击3下）。
   // 管理者模式开启后：时钟变为可调时间输入框（精确到秒），20 分钟后自动解除。
-  let _adminModeTimer = null;
   const ADMIN_MODE_TIMEOUT_MS = 20 * 60 * 1000; // 20 分钟自动解除
+  const STORAGE_KEY_ADMIN_START = 'status_admin_mode_start_v1'; // 管理者模式开启时间戳
 
   function isAdminMode() {
     try {
       return localStorage.getItem(STORAGE_KEY_ADMIN_MODE) === '1';
     } catch (e) { return false; }
   }
+  // 检查管理者模式是否超时（在5秒定时器中调用，不依赖 setTimeout 的可靠性）
+  function _checkAdminModeTimeout() {
+    if (!isAdminMode()) return;
+    try {
+      const start = parseInt(localStorage.getItem(STORAGE_KEY_ADMIN_START) || '0', 10);
+      if (!start) return;
+      if (Date.now() - start >= ADMIN_MODE_TIMEOUT_MS) {
+        setAdminMode(false);
+        showSnackbar('管理者模式已自动解除（20 分钟超时）');
+      }
+    } catch (e) {}
+  }
   function setAdminMode(on) {
     try {
       if (on) {
         localStorage.setItem(STORAGE_KEY_ADMIN_MODE, '1');
-        // 启动 20 分钟自动解除计时器
-        if (_adminModeTimer) clearTimeout(_adminModeTimer);
-        _adminModeTimer = setTimeout(() => {
-          setAdminMode(false);
-          showSnackbar('管理者模式已自动解除（20 分钟超时）');
-        }, ADMIN_MODE_TIMEOUT_MS);
+        // 记录开启时间戳，用于超时检测（不依赖 setTimeout，移动端后台也可靠）
+        localStorage.setItem(STORAGE_KEY_ADMIN_START, String(Date.now()));
       } else {
         localStorage.removeItem(STORAGE_KEY_ADMIN_MODE);
-        if (_adminModeTimer) { clearTimeout(_adminModeTimer); _adminModeTimer = null; }
+        localStorage.removeItem(STORAGE_KEY_ADMIN_START);
         _hideClockEditPanel();
         // 退出管理员模式：清除时间偏移，时钟立刻恢复为实时时间
         try { localStorage.removeItem(STORAGE_KEY_TIME_OFFSET); } catch (e) {}
@@ -2737,7 +2745,25 @@ ${css.styleTag}
         const expiry = Date.now() + AUTO_CHECKIN_DURATION_MS;
         localStorage.setItem(STORAGE_KEY_AUTO_CHECKIN, String(expiry));
         _autoCheckinRandomOffsets = {};
-        showSnackbar('自动打卡已开启，持续 4 小时');
+        // 清除已完成的打卡标记，允许当前小时重新打卡
+        const now = getNow();
+        const today = getGMTDateString(now);
+        const hourStr = getGMTHourString(now);
+        try { sessionStorage.removeItem('auto_checkin_done_' + today + '_' + hourStr); } catch (e) {}
+        // 显示当前小时容差状态提示
+        const access = getHourAccessState(today, hourStr, now.getTime());
+        const toleranceMin = settings.timeRangeMinutes || 15;
+        let hint = '';
+        if (access === 'editable') {
+          hint = '当前小时正在容差窗口内，将在随机时刻自动打卡';
+        } else if (access === 'future') {
+          hint = '当前小时尚未开始，将在整点后容差内自动打卡';
+        } else {
+          hint = '当前小时已过容差，将在下个整点后自动打卡';
+        }
+        showSnackbar('自动打卡已开启（4小时）— ' + hint);
+        // 立即尝试一次（如果已到随机时刻）
+        setTimeout(() => { try { _tryAutoCheckin(); } catch (e) {} }, 500);
       } else {
         localStorage.removeItem(STORAGE_KEY_AUTO_CHECKIN);
         _autoCheckinRandomOffsets = {};
@@ -2825,7 +2851,8 @@ ${css.styleTag}
     let clicks = 0;
     let timer = null;
     function reset() { clicks = 0; if (timer) { clearTimeout(timer); timer = null; } }
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault();
       clicks++;
       if (timer) clearTimeout(timer);
       // 5 连击：切换自动打卡（优先判断，到 5 下立即执行）
@@ -2835,6 +2862,7 @@ ${css.styleTag}
         return;
       }
       // 超时处理：停在 3 下 → 切换管理者模式；其他数量 → 仅清零
+      // 超时设为 2 秒，方便移动端快速点击
       timer = setTimeout(() => {
         if (clicks === 3) {
           const wasAdmin = isAdminMode();
@@ -2846,7 +2874,7 @@ ${css.styleTag}
           }
         }
         reset();
-      }, 1200);
+      }, 2000);
     });
   }
 
@@ -2897,6 +2925,9 @@ ${css.styleTag}
           }
         }
       }
+
+      // 管理者模式超时检测（基于时间戳，移动端后台也可靠）
+      try { _checkAdminModeTimeout(); } catch (e) {}
 
       // 自动打卡检测
       try { _tryAutoCheckin(); } catch (e) {}
