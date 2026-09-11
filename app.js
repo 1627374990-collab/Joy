@@ -2862,7 +2862,6 @@ ${css.styleTag}
         return;
       }
       // 超时处理：停在 3 下 → 切换管理者模式；其他数量 → 仅清零
-      // 超时设为 2 秒，方便移动端快速点击
       timer = setTimeout(() => {
         if (clicks === 3) {
           const wasAdmin = isAdminMode();
@@ -2874,7 +2873,7 @@ ${css.styleTag}
           }
         }
         reset();
-      }, 2000);
+      }, 1200);
     });
   }
 
