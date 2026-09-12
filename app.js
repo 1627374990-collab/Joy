@@ -2745,21 +2745,27 @@ ${css.styleTag}
         const expiry = Date.now() + AUTO_CHECKIN_DURATION_MS;
         localStorage.setItem(STORAGE_KEY_AUTO_CHECKIN, String(expiry));
         _autoCheckinRandomOffsets = {};
-        // 清除已完成的打卡标记，允许当前小时重新打卡
+        // 清除所有旧的随机偏移和已完成标记，确保每个小时重新生成随机打卡时间
+        try {
+          for (let i = sessionStorage.length - 1; i >= 0; i--) {
+            const key = sessionStorage.key(i);
+            if (key && (key.startsWith('auto_checkin_offset_') || key.startsWith('auto_checkin_done_'))) {
+              sessionStorage.removeItem(key);
+            }
+          }
+        } catch (e) {}
+        // 显示当前小时容差状态提示
         const now = getNow();
         const today = getGMTDateString(now);
         const hourStr = getGMTHourString(now);
-        try { sessionStorage.removeItem('auto_checkin_done_' + today + '_' + hourStr); } catch (e) {}
-        // 显示当前小时容差状态提示
         const access = getHourAccessState(today, hourStr, now.getTime());
-        const toleranceMin = settings.timeRangeMinutes || 15;
         let hint = '';
         if (access === 'editable') {
           hint = '当前小时正在容差窗口内，将在随机时刻自动打卡';
         } else if (access === 'future') {
-          hint = '当前小时尚未开始，将在整点后容差内自动打卡';
+          hint = '当前小时尚未开始，将在整点后容差内随机打卡';
         } else {
-          hint = '当前小时已过容差，将在下个整点后自动打卡';
+          hint = '当前小时已过容差，将在下个整点后随机打卡';
         }
         showSnackbar('自动打卡已开启（4小时）— ' + hint);
         // 立即尝试一次（如果已到随机时刻）
@@ -3113,9 +3119,17 @@ ${css.styleTag}
         scheduleRefreshStickyOffset();
       }, 30);
     }
-    window.addEventListener('pageshow', scheduleReload, { passive: true });
+    window.addEventListener('pageshow', () => {
+      scheduleReload();
+      // 页面从后台/缓存恢复时立即检查自动打卡（移动端后台定时器会暂停）
+      setTimeout(() => { try { _tryAutoCheckin(); } catch (e) {} }, 100);
+    }, { passive: true });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') scheduleReload();
+      if (document.visibilityState === 'visible') {
+        scheduleReload();
+        // 页面从后台切回前台时立即检查自动打卡
+        setTimeout(() => { try { _tryAutoCheckin(); } catch (e) {} }, 100);
+      }
     }, { passive: true });
 
     // Resize / orientation change -> sticky 高度重算
