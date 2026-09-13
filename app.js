@@ -445,7 +445,11 @@
   function loadCategories() {
     try {
       const c = localStorage.getItem(STORAGE_KEY_CATEGORIES);
-      if (c) return JSON.parse(c);
+      if (c) {
+        const parsed = JSON.parse(c);
+        // 防御：如果保存的是空数组，回退到默认分类（避免一键打卡/自动打卡无内容可填）
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
     } catch (e) { /* ignore */ }
     return JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
   }
@@ -2792,8 +2796,9 @@ ${css.styleTag}
       }
     } catch (e) {}
     const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
-    // 随机偏移在 [0, toleranceMs) 内，至少 5 秒保证不会太早
-    const rand = Math.max(5000, Math.floor(Math.random() * toleranceMs));
+    // 随机偏移在容差窗口的前半段内 [5秒, 容差/2]，避免等待太久
+    const maxOffset = Math.max(10000, Math.floor(toleranceMs / 2));
+    const rand = Math.max(5000, Math.floor(Math.random() * maxOffset));
     _autoCheckinRandomOffsets[key] = rand;
     try { sessionStorage.setItem(sKey, String(rand)); } catch (e) {}
     return rand;
@@ -2856,14 +2861,18 @@ ${css.styleTag}
     el.style.userSelect = 'none';
     let clicks = 0;
     let timer = null;
+    let cooldown = 0; // 冷却时间戳，防止连续触发
     function reset() { clicks = 0; if (timer) { clearTimeout(timer); timer = null; } }
     el.addEventListener('click', (ev) => {
       ev.preventDefault();
+      // 冷却期内忽略点击（防止5连击后紧接着的点击触发第二次切换）
+      if (Date.now() < cooldown) return;
       clicks++;
       if (timer) clearTimeout(timer);
       // 5 连击：切换自动打卡（优先判断，到 5 下立即执行）
       if (clicks >= 5) {
         reset();
+        cooldown = Date.now() + 1500; // 1.5秒冷却
         setAutoCheckin(!isAutoCheckinActive());
         return;
       }
@@ -2872,6 +2881,7 @@ ${css.styleTag}
         if (clicks === 3) {
           const wasAdmin = isAdminMode();
           setAdminMode(!wasAdmin);
+          cooldown = Date.now() + 1500; // 1.5秒冷却
           if (!wasAdmin) {
             setTimeout(_showClockEditPanel, 100);
           } else {
