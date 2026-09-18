@@ -189,7 +189,7 @@
   }
 
   function isOutOfRange(date, hour, timestamp) {
-    const tolerance = settings.timeRangeMinutes * 60 * 1000;
+    const tolerance = (settings.timeRangeMinutes || 15) * 60 * 1000;
     const y = parseInt(date.slice(0, 4));
     const m = parseInt(date.slice(5, 7)) - 1;
     const d = parseInt(date.slice(8, 10));
@@ -215,7 +215,7 @@
   //   - 过了时间容差：可填入但须高亮 (grace-fill → highlighted, and edit=overwrite existing is LOCKED)
   function getHourAccessState(dateStr, hourStr, refNowMs) {
     const now = refNowMs || getNow().getTime();
-    const toleranceMs = settings.timeRangeMinutes * 60 * 1000;
+    const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
     const y = parseInt(dateStr.slice(0, 4));
     const mo = parseInt(dateStr.slice(5, 7)) - 1;
     const d = parseInt(dateStr.slice(8, 10));
@@ -2730,6 +2730,19 @@ ${css.styleTag}
   const STORAGE_KEY_AUTO_CHECKIN = 'status_auto_checkin_expiry_v1';
   const AUTO_CHECKIN_DURATION_MS = 4 * 60 * 60 * 1000; // 4 小时
   let _autoCheckinRandomOffsets = {}; // key: 'date_hour' → random offset in ms
+  let _wakeLock = null; // 屏幕常亮锁，减少后台/息屏时定时器被挂起
+
+  async function _requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        _wakeLock = await navigator.wakeLock.request('screen');
+        _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+      }
+    } catch (e) { /* ignore */ }
+  }
+  function _releaseWakeLock() {
+    try { if (_wakeLock) { _wakeLock.release(); _wakeLock = null; } } catch (e) {}
+  }
 
   function isAutoCheckinActive() {
     try {
@@ -2772,11 +2785,14 @@ ${css.styleTag}
           hint = '当前小时已过容差，将在下个整点后随机打卡';
         }
         showSnackbar('自动打卡已开启（4小时）— ' + hint);
+        // 请求屏幕常亮锁（前台时减少息屏导致定时器挂起）
+        _requestWakeLock();
         // 立即尝试一次（如果已到随机时刻）
         setTimeout(() => { try { _tryAutoCheckin(); } catch (e) {} }, 500);
       } else {
         localStorage.removeItem(STORAGE_KEY_AUTO_CHECKIN);
         _autoCheckinRandomOffsets = {};
+        _releaseWakeLock();
         showSnackbar('自动打卡已关闭');
       }
     } catch (e) {}
@@ -2796,61 +2812,94 @@ ${css.styleTag}
       }
     } catch (e) {}
     const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
-    // 随机偏移在容差窗口的前半段内 [5秒, 容差/2]，避免等待太久
-    const maxOffset = Math.max(10000, Math.floor(toleranceMs / 2));
+    // 随机偏移在容差窗口的前 1/3 段内 [5秒, 容差/3]，尽快完成打卡
+    const maxOffset = Math.max(10000, Math.floor(toleranceMs / 3));
     const rand = Math.max(5000, Math.floor(Math.random() * maxOffset));
     _autoCheckinRandomOffsets[key] = rand;
     try { sessionStorage.setItem(sKey, String(rand)); } catch (e) {}
     return rand;
   }
 
-  function _tryAutoCheckin() {
+  // 获取自动打卡开启时刻（用于恢复时只补开启之后漏掉的小时）
+  function _getAutoCheckinStartTime() {
+    try {
+      const expiry = parseInt(localStorage.getItem(STORAGE_KEY_AUTO_CHECKIN) || '0', 10);
+      if (!expiry) return 0;
+      return expiry - AUTO_CHECKIN_DURATION_MS;
+    } catch (e) { return 0; }
+  }
+
+  // 尝试对指定小时自动打卡（dateStr/hourStr 可选，默认当前小时）
+  function _tryAutoCheckin(dateStr, hourStr) {
     if (!isAutoCheckinActive()) return;
     const now = getNow();
-    const today = getGMTDateString(now);
-    const hourStr = getGMTHourString(now);
-    const date = getTodayDate();
+    const date = dateStr || getTodayDate();
+    const hour = hourStr || getGMTHourString(now);
 
-    const access = getHourAccessState(date, hourStr, now.getTime());
+    const access = getHourAccessState(date, hour, now.getTime());
     if (access === 'future') return;
-    if (access !== 'editable') return; // 只在容差内自动打卡
+    if (access !== 'editable' && access !== 'grace-fill') return;
 
-    // 检查是否已打卡过
-    const autoKey = 'auto_checkin_done_' + date + '_' + hourStr;
+    const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
+    const hInt = parseInt(hour, 10);
+    const y = parseInt(date.slice(0, 4));
+    const mo = parseInt(date.slice(5, 7)) - 1;
+    const d = parseInt(date.slice(8, 10));
+    const hourStart = new Date(Date.UTC(y, mo, d, hInt, 0, 0, 0)).getTime();
+    const startTime = _getAutoCheckinStartTime();
+    if (startTime > 0 && hourStart + toleranceMs < startTime) return;
+
+    const autoKey = 'auto_checkin_done_' + date + '_' + hour;
     try {
       if (sessionStorage.getItem(autoKey) === '1') return;
     } catch (e) {}
 
-    // 检查是否到了随机时刻
-    const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
-    const y = parseInt(date.slice(0, 4));
-    const mo = parseInt(date.slice(5, 7)) - 1;
-    const d = parseInt(date.slice(8, 10));
-    const h = parseInt(hourStr, 10);
-    const hourStart = new Date(Date.UTC(y, mo, d, h, 0, 0, 0)).getTime();
     const elapsed = now.getTime() - hourStart;
-    const randOffset = _getAutoCheckinRandomOffset(date, hourStr);
+    const randOffset = _getAutoCheckinRandomOffset(date, hour);
+    // 容差外（grace-fill）直接打卡，不再等随机时刻；容差内仍等随机偏移
+    if (access === 'editable' && elapsed < randOffset) return;
 
-    if (elapsed < randOffset) return; // 还没到随机时刻
-
-    // 执行自动打卡
     try {
       const preset = getPresetTargets();
       const status = preset.status || STATUS_CHECKED;
       const targets = preset.targets;
       const parentTargets = preset.parentTargets;
-      const count = fillRange(date, hourStr, hourStr, status, targets, parentTargets, now.getTime(), access);
-      // 只有实际填充了内容才标记为已完成，避免 count=0 时误标记导致漏打卡
+      const count = fillRange(date, hour, hour, status, targets, parentTargets, now.getTime(), access);
       if (count > 0) {
         try { sessionStorage.setItem(autoKey, '1'); } catch (e) {}
-        showSnackbar('自动打卡 ' + hourStr + ':00 (' + count + ' 项)');
+        showSnackbar('自动打卡 ' + hour + ':00 (' + count + ' 项)');
         renderAll(true);
       } else {
-        // count=0：可能所有项已填或分类为空，仍标记完成避免每5秒重复尝试
         try { sessionStorage.setItem(autoKey, '1'); } catch (e) {}
       }
     } catch (e) {
-      console.error('[AutoCheckin] fillRange error:', e);
+      console.error('[AutoCheckin] error:', e);
+    }
+  }
+
+  // 回到前台时恢复漏掉的自动打卡：从自动打卡开启时刻到当前小时，逐小时补打卡
+  function _recoverMissedAutoCheckins() {
+    if (!isAutoCheckinActive()) return;
+    const now = getNow();
+    const today = getGMTDateString(now);
+    const currentHour = parseInt(getGMTHourString(now), 10);
+    const startTime = _getAutoCheckinStartTime();
+
+    // 遍历今天从 0 到当前小时的所有小时（跨天场景简化处理：只补今天）
+    const toleranceMs = (settings.timeRangeMinutes || 15) * 60 * 1000;
+    for (let h = 0; h <= currentHour; h++) {
+      const hourStr = String(h).padStart(2, '0');
+      const hourStartMs = new Date(Date.UTC(
+        parseInt(today.slice(0, 4)),
+        parseInt(today.slice(5, 7)) - 1,
+        parseInt(today.slice(8, 10)),
+        h, 0, 0, 0
+      )).getTime();
+      // 跳过容差窗口完全在自动打卡开启之前的小时
+      if (startTime > 0 && hourStartMs + toleranceMs < startTime) continue;
+      // 跳过未来小时
+      if (hourStartMs > now.getTime()) continue;
+      _tryAutoCheckin(today, hourStr);
     }
   }
 
@@ -3131,14 +3180,16 @@ ${css.styleTag}
     }
     window.addEventListener('pageshow', () => {
       scheduleReload();
-      // 页面从后台/缓存恢复时立即检查自动打卡（移动端后台定时器会暂停）
-      setTimeout(() => { try { _tryAutoCheckin(); } catch (e) {} }, 100);
+      // 页面从后台/缓存恢复时补打卡（移动端后台定时器会暂停，可能漏掉整点）
+      setTimeout(() => { try { _recoverMissedAutoCheckins(); } catch (e) {} }, 200);
     }, { passive: true });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
         scheduleReload();
-        // 页面从后台切回前台时立即检查自动打卡
-        setTimeout(() => { try { _tryAutoCheckin(); } catch (e) {} }, 100);
+        // 页面从后台切回前台时补打卡
+        setTimeout(() => { try { _recoverMissedAutoCheckins(); } catch (e) {} }, 200);
+        // 回到前台后重新申请常亮锁（隐藏时浏览器会自动释放）
+        if (isAutoCheckinActive()) _requestWakeLock();
       }
     }, { passive: true });
 
