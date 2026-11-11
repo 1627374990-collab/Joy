@@ -342,8 +342,8 @@
     try {
       window.sessionStorage.setItem('history_target_date', date);
     } catch (e) {}
-    // 同步保存用户当前修改，防止 PWA 回跳时未保存的状态丢失
-    try { saveRecordsSync(); saveSettingsSync(); } catch (e) {}
+    // 注意：历史页只读，不要在这里回写 records。
+    // 历史页内存中的 records 可能是过期快照，回写会覆盖主页面刚打卡的最新数据。
     const url = new URL('index.html', window.location.href);
     url.searchParams.set('date', date);
     window.location.href = url.toString();

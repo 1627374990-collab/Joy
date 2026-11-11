@@ -379,11 +379,20 @@
     try {
       const url = new URL(window.location.href);
       const q = url.searchParams.get('date');
-      if (isValidDateString(q)) return { date: q, fromHistory: true };
+      if (isValidDateString(q)) {
+        // URL 已带日期，sessionStorage 副本冗余，立刻清掉，
+        // 防止它在之后的冷启动里被当成“本次要打开的日期”。
+        try { window.sessionStorage.removeItem('history_target_date'); } catch (e) {}
+        return { date: q, fromHistory: true };
+      }
     } catch (e) {}
     try {
       const fromStorage = window.sessionStorage.getItem('history_target_date');
       if (isValidDateString(fromStorage)) {
+        // 一次性消费：读取后立刻清除，避免该值长期残留，
+        // 导致之后每次冷启动(index.html 无 ?date=)都跳到旧的“历史日期”，
+        // 让用户误以为刚打的卡/记录消失了。
+        try { window.sessionStorage.removeItem('history_target_date'); } catch (e) {}
         return { date: fromStorage, fromHistory: true, persistToUrl: true };
       }
     } catch (e) {}
@@ -469,19 +478,35 @@
     return {};
   }
 
+  // 统一写盘：写失败（多为 localStorage 配额已满）时不再静默吞掉，
+  // 前台提示一次，避免“打卡成功但刷新/切页后记录消失”且无从排查。
+  let _recordsWriteWarned = false;
+  function _persistRecords() {
+    try {
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records));
+      _recordsWriteWarned = false;
+      return true;
+    } catch (e) {
+      console.error('[Storage] records 写入失败:', e);
+      if (!_recordsWriteWarned && typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        _recordsWriteWarned = true;
+        try { showSnackbar('⚠️ 本地存储写入失败（空间可能已满），记录可能无法保存'); } catch (_) {}
+      }
+      return false;
+    }
+  }
+
   // saveRecords 走 debounce(150ms) + 空闲时写盘
   // 150ms 对「连续打勾/打字」足够合并为一次写入，又不会让用户感知到"不保存"
   const _debouncedFlushRecords = _debounce(() => {
-    _scheduleIdle(() => {
-      try { localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records)); } catch (e) {}
-    }, 250);
+    _scheduleIdle(() => { _persistRecords(); }, 250);
   }, 150);
   function saveRecords() {
     _debouncedFlushRecords();
   }
   // 同步写盘（pageshow/pagehide/export/print 等关键时机调用）
   function saveRecordsSync() {
-    try { localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records)); } catch (e) {}
+    _persistRecords();
   }
   // 离开页面前保证写盘一次（移动端切到后台/杀进程前 iOS Safari 可能不执行，但多一层保障）
   if (typeof window !== 'undefined') {
@@ -1451,6 +1476,9 @@
 
     function doFill() {
       const count = fillRange(date, hourStr, hourStr, status, targets, parentTargets, now.getTime(), access);
+      // 打卡后立即同步落盘：避免防抖窗口内切到历史/设置页时，
+      // 页面恢复后从 localStorage 重新读取旧数据，导致刚打的卡看似“消失”
+      try { saveRecordsSync(); } catch (e) {}
       if (count > 0) {
         showSnackbar(`已打卡 ${hourStr}:00 (${count} 项)`);
       } else {
@@ -2865,6 +2893,8 @@ ${css.styleTag}
       const targets = preset.targets;
       const parentTargets = preset.parentTargets;
       const count = fillRange(date, hour, hour, status, targets, parentTargets, now.getTime(), access);
+      // 自动打卡同样立即同步落盘，防止用户随即切页导致记录只停留在内存
+      try { saveRecordsSync(); } catch (e) {}
       if (count > 0) {
         try { sessionStorage.setItem(autoKey, '1'); } catch (e) {}
         showSnackbar('自动打卡 ' + hour + ':00 (' + count + ' 项)');
@@ -3083,6 +3113,8 @@ ${css.styleTag}
     // Clicking the date label jumps back to TODAY (and clears any ?date= from the URL so next load defaults today)
     document.getElementById('current-date').addEventListener('click', () => {
       currentDate = getTodayDate();
+      // 退出历史编辑模式：同时清掉跨页残留标记，确保后续冷启动回到今天
+      try { window.sessionStorage.removeItem('history_target_date'); } catch (e) {}
       try {
         const u = new URL(window.location.href);
         if (u.searchParams.get('date')) {
