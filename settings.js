@@ -866,27 +866,6 @@
       showSnackbar('数据已导出');
     });
 
-    // Import
-    document.getElementById('btn-import').addEventListener('click', () => {
-      const text = document.getElementById('import-input').value.trim();
-      if (!text) {
-        showSnackbar('请先粘贴 JSON 数据');
-        return;
-      }
-      try {
-        const data = JSON.parse(text);
-        showDialog('导入数据', '导入将覆盖当前所有数据，确定继续？', () => {
-          if (data.settings) localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(data.settings));
-          if (data.categories) localStorage.setItem(STORAGE_KEY_CATEGORIES, JSON.stringify(data.categories));
-          if (data.records) localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(data.records));
-          showSnackbar('数据已导入');
-          setTimeout(() => window.location.reload(), 800);
-        });
-      } catch (e) {
-        showSnackbar('JSON 格式错误');
-      }
-    });
-
     // Clear all
     document.getElementById('btn-clear-all').addEventListener('click', () => {
       showDialog('清除全部数据', '确定要清除所有日期的记录吗？此操作不可恢复！', () => {
@@ -897,12 +876,107 @@
       });
     });
 
+    // ===== 存储诊断 =====
+    function gmtDateCutoff(days) {
+      const d = new Date(Date.now() - days * 86400000);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${dd}`;
+    }
+
+    function renderStorageInfo() {
+      const box = document.getElementById('storage-info');
+      if (!box) return;
+      let raw = '';
+      try { raw = localStorage.getItem(STORAGE_KEY_RECORDS) || ''; } catch (e) {}
+      let days = 0;
+      try { const recs = JSON.parse(raw || '{}'); if (recs && typeof recs === 'object') days = Object.keys(recs).length; } catch (e) {}
+      const sizeKB = raw.length / 1024;
+      const sizeText = sizeKB >= 1024 ? (sizeKB / 1024).toFixed(2) + 'MB' : Math.round(sizeKB) + 'KB';
+      const sizeColor = sizeKB >= 4608 ? '#c62828' : (sizeKB >= 3584 ? '#ef6c00' : '#2e7d32');
+
+      // 写入测试：用与真实打卡完全相同的方式回写整份数据，失败即代表配额已满
+      let writeOk = true;
+      try {
+        if (raw) localStorage.setItem(STORAGE_KEY_RECORDS, raw);
+      } catch (e) { writeOk = false; }
+
+      box.innerHTML =
+        `<div>记录数据体积：<b style="color:${sizeColor}">${sizeText}</b>（${days} 天）</div>` +
+        `<div id="storage-quota"></div>` +
+        `<div>写入测试：<b style="color:${writeOk ? '#2e7d32' : '#c62828'}">${writeOk ? '正常' : '失败（存储空间已满，打卡将无法保存！）'}</b></div>`;
+      box.style.background = writeOk ? '#f8f9fa' : '#fdecea';
+
+      // 浏览器配额（iOS 13.4+/Android Chrome 支持 estimate；不支持时留空）
+      if (navigator.storage && typeof navigator.storage.estimate === 'function') {
+        navigator.storage.estimate().then((est) => {
+          const el = document.getElementById('storage-quota');
+          if (!el || !est || !est.quota) return;
+          const usedMB = ((est.usage || 0) / 1048576).toFixed(1);
+          const quotaMB = (est.quota / 1048576).toFixed(0);
+          el.textContent = `浏览器配额约 ${quotaMB}MB，本应用已用 ${usedMB}MB`;
+        }).catch(() => {});
+      } else {
+        const el = document.getElementById('storage-quota');
+        if (el) el.textContent = '（当前浏览器不支持配额查询）';
+      }
+    }
+
+    // 手动清理早期历史（保留最近90天）
+    document.getElementById('btn-prune-history').addEventListener('click', () => {
+      showDialog('清理早期历史', '将删除 90 天前的所有打卡记录，此操作不可恢复（建议先导出PDF存档）。确定继续？', () => {
+        try {
+          const recs = (() => {
+            try { return JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDS) || '{}') || {}; }
+            catch (e) { return {}; }
+          })();
+          const cutoff = gmtDateCutoff(90);
+          let removed = 0;
+          for (const d of Object.keys(recs)) {
+            if (d < cutoff) { delete recs[d]; removed++; }
+          }
+          localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(recs));
+          showSnackbar(`已清理 ${removed} 天早期历史，释放空间成功`);
+          setTimeout(renderStorageInfo, 200);
+        } catch (e) {
+          showSnackbar('清理失败：' + (e && e.message ? e.message : '未知错误'));
+        }
+      });
+    });
+
+    // 导入时同步 try/catch，避免配额满导致导入失败被静默吞掉
+    document.getElementById('btn-import').addEventListener('click', () => {
+      const text = document.getElementById('import-input').value.trim();
+      if (!text) {
+        showSnackbar('请先粘贴 JSON 数据');
+        return;
+      }
+      try {
+        const data = JSON.parse(text);
+        showDialog('导入数据', '导入将覆盖当前所有数据，确定继续？', () => {
+          try {
+            if (data.settings) localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(data.settings));
+            if (data.categories) localStorage.setItem(STORAGE_KEY_CATEGORIES, JSON.stringify(data.categories));
+            if (data.records) localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(data.records));
+            showSnackbar('数据已导入');
+            setTimeout(() => window.location.reload(), 800);
+          } catch (e) {
+            showSnackbar('导入失败：存储空间不足，请先清理早期历史后再导入');
+          }
+        });
+      } catch (e) {
+        showSnackbar('JSON 格式错误');
+      }
+    });
+
     // Apply font size on load
     applyFontSize(settings.fontSize || 'medium');
 
     // Render
     renderCategories();
     renderParents();
+    renderStorageInfo();
   }
 
   function persistHighlightSettings() {

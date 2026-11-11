@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.7.4-storage-governance';
+  const VERSION = 'v1.7.5-storage-diagnostics';
   const CACHE_PREFIX = 'status-recorder-';
   const STATIC_CACHE = CACHE_PREFIX + 'static-' + VERSION;
   const RUNTIME_CACHE = CACHE_PREFIX + 'runtime-' + VERSION;

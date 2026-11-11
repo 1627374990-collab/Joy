@@ -310,6 +310,14 @@
   <!-- Data Management -->
   <section class="settings-section import-export">
     <h2>💾 数据管理</h2>
+    <!-- 存储诊断：直观呈现打卡数据体积、浏览器配额与写入测试结果 -->
+    <div id="storage-info" style="border:1px solid #e0e0e0; border-radius:8px; padding:10px 12px; font-size:14px; line-height:1.8; color:#555; margin-bottom:12px; background:#f8f9fa;">
+      <div>正在统计存储信息...</div>
+    </div>
+    <div class="settings-row" style="margin-bottom:10px;">
+      <label>清理早期历史 (保留最近90天，建议先导出PDF存档)</label>
+      <button id="btn-prune-history" class="btn btn-sm">清理早期历史</button>
+    </div>
     <div class="settings-row">
       <label>导出全部数据</label>
       <button id="btn-export" class="btn btn-sm">导出</button>
@@ -340,7 +348,7 @@
   </div>
 </div>
 
-<script src="settings.js?v=170"></script>
+<script src="settings.js?v=171"></script>
 
 <!-- iOS PWA standalone 模式下保持站内跳转不跳出到 Safari -->
 <script>
