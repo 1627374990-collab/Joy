@@ -45,16 +45,88 @@
     return JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
   }
 
+  function mergeLegacyHour(legacy, paddedRec) {
+    const legacyObj = (legacy && typeof legacy === 'object') ? legacy : {};
+    const paddedObj = (paddedRec && typeof paddedRec === 'object') ? paddedRec : {};
+    const merged = {};
+    const catIds = Object.keys(Object.assign({}, legacyObj, paddedObj));
+    for (const cid of catIds) {
+      if (cid === '_meta') {
+        const pm = paddedObj._meta, lm = legacyObj._meta;
+        if (pm && (pm.note || '').trim()) merged._meta = pm;
+        else if (lm && (lm.note || '').trim()) merged._meta = lm;
+        continue;
+      }
+      const lc = (legacyObj[cid] && typeof legacyObj[cid] === 'object') ? legacyObj[cid] : {};
+      const pc = (paddedObj[cid] && typeof paddedObj[cid] === 'object') ? paddedObj[cid] : {};
+      const mc = {};
+      for (const sk of Object.keys(Object.assign({}, lc, pc))) {
+        const le = lc[sk], pe = pc[sk];
+        if (pe && pe.status) mc[sk] = pe;
+        else if (le && le.status) mc[sk] = le;
+      }
+      if (Object.keys(mc).length) merged[cid] = mc;
+    }
+    return merged;
+  }
+
+  function compactRecordsTree(recs) {
+    for (const date of Object.keys(recs)) {
+      const day = recs[date];
+      if (!day || typeof day !== 'object') { delete recs[date]; continue; }
+      const hourKeys = Object.keys(day);
+      if (hourKeys.some(k => /^\d$/.test(k))) {
+        for (const k of hourKeys) {
+          if (!/^\d{1,2}$/.test(k)) continue;
+          const padded = k.length === 1 ? '0' + k : k;
+          if (padded === k) continue;
+          day[padded] = mergeLegacyHour(day[k], day[padded]);
+          delete day[k];
+        }
+      }
+      for (const hour of Object.keys(day)) {
+        const hr = day[hour];
+        if (!hr || typeof hr !== 'object') { delete day[hour]; continue; }
+        for (const catId of Object.keys(hr)) {
+          if (catId === '_meta') {
+            const m = hr[catId];
+            if (!m || !(m.note || '').trim()) { delete hr[catId]; }
+            continue;
+          }
+          const cat = hr[catId];
+          if (!cat || typeof cat !== 'object') { delete hr[catId]; continue; }
+          for (const sk of Object.keys(cat)) {
+            const en = cat[sk];
+            if (!en || !en.status) { delete cat[sk]; }
+          }
+          if (!Object.keys(cat).length) { delete hr[catId]; }
+        }
+        if (!Object.keys(day[hour]).length) { delete day[hour]; }
+      }
+      if (!Object.keys(day).length) { delete recs[date]; }
+    }
+    return recs;
+  }
+
   function loadRecords() {
+    let recs = {};
     try {
       const r = localStorage.getItem(STORAGE_KEY_RECORDS);
-      if (r) return JSON.parse(r);
-    } catch (e) { /* ignore */ }
-    return {};
+      if (r) recs = JSON.parse(r) || {};
+    } catch (e) { recs = {}; }
+    if (!recs || typeof recs !== 'object' || Array.isArray(recs)) recs = {};
+    return compactRecordsTree(recs);
   }
 
   function saveRecords() {
-    localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records));
+    // 写盘前压缩：剔除空条目，降低体积，避免配额满导致删除/修改无法持久化
+    compactRecordsTree(records);
+    try {
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records));
+    } catch (e) {
+      console.error('[Storage] history records 写入失败:', e);
+      try { showSnackbar && showSnackbar('⚠️ 本地存储写入失败（空间可能已满）'); } catch (_) {}
+    }
   }
 
   // ===== Helpers =====

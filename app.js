@@ -10,6 +10,14 @@
   const STORAGE_KEY_ADMIN_MODE = 'status_admin_mode_v1'; // 管理者模式开关（独立于settings，方便settings.js/history.js也读）
   const DEFAULT_TIME_RANGE_MINUTES_LOCKED = 15; // 关闭管理者模式时，时间容差固定为此值（用户要求默认15）
 
+  // ===== 本地存储容量治理（防止“历史太多 → 配额满 → 打卡写盘失败 → 记录消失”）=====
+  // 体量估算：30 子项/小时 × 24h × ~60B ≈ 50-70KB/天，约 3 个月即可触及 iOS Safari ~5MB 配额。
+  const RECORDS_SOFT_LIMIT = 3.5 * 1024 * 1024;  // 3.5MB：提示 + 清理 365 天前
+  const RECORDS_HARD_LIMIT = 4.5 * 1024 * 1024;  // 4.5MB：再清理 180 天前
+  const RECORDS_RETENTION_DAYS = 365;            // 常规保留期（天）
+  const RECORDS_EMERGENCY_DAYS = [180, 90];      // 写盘失败时逐级清理的保留期
+  let _storageSizeWarned = false;
+
   const DEFAULT_CATEGORIES = [
     // ===== SCC Patrol Record 默认配置 =====
     // 检查内容1: TMs Fresh — 平台及设备: Open SCC, DFH-4, DFH-4E, DFH3B
@@ -470,30 +478,160 @@
     }, 400);
   }
 
+  // ===== Records 压缩与容量治理 =====
+  // legacy 数字 hour key（'7'）与补零 key（'07'）逐条目深合并：
+  // 非空条目优先；两者都非空时补零 key（当前版本写入源）优先，绝不因合并丢失已填数据。
+  function _mergeLegacyHour(legacy, paddedRec) {
+    const legacyObj = (legacy && typeof legacy === 'object') ? legacy : {};
+    const paddedObj = (paddedRec && typeof paddedRec === 'object') ? paddedRec : {};
+    const merged = {};
+    const catIds = Object.keys(Object.assign({}, legacyObj, paddedObj));
+    for (const cid of catIds) {
+      if (cid === '_meta') {
+        const pm = paddedObj._meta, lm = legacyObj._meta;
+        if (pm && (pm.note || '').trim()) merged._meta = pm;
+        else if (lm && (lm.note || '').trim()) merged._meta = lm;
+        continue;
+      }
+      const lc = (legacyObj[cid] && typeof legacyObj[cid] === 'object') ? legacyObj[cid] : {};
+      const pc = (paddedObj[cid] && typeof paddedObj[cid] === 'object') ? paddedObj[cid] : {};
+      const mc = {};
+      for (const sk of Object.keys(Object.assign({}, lc, pc))) {
+        const le = lc[sk], pe = pc[sk];
+        if (pe && pe.status) mc[sk] = pe;
+        else if (le && le.status) mc[sk] = le;
+      }
+      if (Object.keys(mc).length) merged[cid] = mc;
+    }
+    return merged;
+  }
+
+  // 就地压缩 records 树：剔除空条目/空 _meta/空小时/空日期；
+  // 并把遗留的数字型 hour key（'7'）合并归一到补零 key（'07'，当前版本写入格式），
+  // 修复双 key 数据被表格漏读的问题。返回是否有结构变化。
+  function _compactRecordsTree(recs) {
+    let changed = false;
+    for (const date of Object.keys(recs)) {
+      const day = recs[date];
+      if (!day || typeof day !== 'object') { delete recs[date]; changed = true; continue; }
+      const hourKeys = Object.keys(day);
+      if (hourKeys.some(k => /^\d$/.test(k))) {
+        changed = true;
+        for (const k of hourKeys) {
+          if (!/^\d{1,2}$/.test(k)) continue;
+          const padded = k.length === 1 ? '0' + k : k;
+          if (padded === k) continue;
+          day[padded] = _mergeLegacyHour(day[k], day[padded]);
+          delete day[k];
+        }
+      }
+      for (const hour of Object.keys(day)) {
+        const hr = day[hour];
+        if (!hr || typeof hr !== 'object') { delete day[hour]; changed = true; continue; }
+        for (const catId of Object.keys(hr)) {
+          if (catId === '_meta') {
+            const m = hr[catId];
+            if (!m || !(m.note || '').trim()) { delete hr[catId]; changed = true; }
+            continue;
+          }
+          const cat = hr[catId];
+          if (!cat || typeof cat !== 'object') { delete hr[catId]; changed = true; continue; }
+          for (const sk of Object.keys(cat)) {
+            const en = cat[sk];
+            if (!en || !en.status) { delete cat[sk]; changed = true; }
+          }
+          if (!Object.keys(cat).length) { delete hr[catId]; changed = true; }
+        }
+        if (!Object.keys(day[hour]).length) { delete day[hour]; changed = true; }
+      }
+      if (!Object.keys(day).length) { delete recs[date]; changed = true; }
+    }
+    return changed;
+  }
+
+  function _gmtDateCutoff(days) {
+    return getGMTDateString(new Date(Date.now() - days * 86400000));
+  }
+
+  // 清理 days 天之前的日期（按 GMT 日期字符串比较），返回清理掉的天数
+  function _pruneRecordsOlderThan(recs, days) {
+    const cutoff = _gmtDateCutoff(days);
+    let removed = 0;
+    for (const date of Object.keys(recs)) {
+      if (date < cutoff) { delete recs[date]; removed++; }
+    }
+    return removed;
+  }
+
+  function _recordsJsonSize(recs) {
+    try { return JSON.stringify(recs).length; } catch (e) { return 0; }
+  }
+
   function loadRecords() {
+    let recs = {};
     try {
       const r = localStorage.getItem(STORAGE_KEY_RECORDS);
-      if (r) return JSON.parse(r);
-    } catch (e) { /* ignore */ }
-    return {};
+      if (r) recs = JSON.parse(r) || {};
+    } catch (e) { recs = {}; }
+    if (!recs || typeof recs !== 'object' || Array.isArray(recs)) recs = {};
+
+    // 压缩 + 归一（幂等），并按体积阈值清理超期历史
+    const changed = _compactRecordsTree(recs);
+    let size = _recordsJsonSize(recs);
+    let pruned = 0;
+    let prunedNote = '';
+    if (size > RECORDS_HARD_LIMIT) {
+      pruned = _pruneRecordsOlderThan(recs, 180);
+      if (pruned > 0) prunedNote = `存储接近上限，已自动清理 ${pruned} 天早期本地历史`;
+    } else if (size > RECORDS_SOFT_LIMIT) {
+      pruned = _pruneRecordsOlderThan(recs, RECORDS_RETENTION_DAYS);
+      if (pruned > 0) prunedNote = `已自动清理 ${pruned} 天早期本地历史（超过一年）`;
+    }
+    if (pruned > 0) size = _recordsJsonSize(recs);
+
+    // 结构变化或发生过清理时回写，让磁盘与内存一致（失败不阻塞加载）
+    if (changed || pruned > 0) {
+      try { localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(recs)); } catch (e) {}
+    }
+    // 前台提示（每次页面会话只提示一次）
+    try {
+      if (prunedNote) {
+        showSnackbar(prunedNote);
+      } else if (size > RECORDS_SOFT_LIMIT && !_storageSizeWarned) {
+        _storageSizeWarned = true;
+        showSnackbar('本地历史体积较大(' + (size / 1048576).toFixed(1) + 'MB)，建议导出PDF存档后清理早期历史');
+      }
+    } catch (e) {}
+    return recs;
   }
 
   // 统一写盘：写失败（多为 localStorage 配额已满）时不再静默吞掉，
-  // 前台提示一次，避免“打卡成功但刷新/切页后记录消失”且无从排查。
+  // 先逐级清理早期历史后重试；仍失败则前台明确提示，
+  // 避免“打卡成功但刷新/切页后记录消失”且无从排查。
   let _recordsWriteWarned = false;
   function _persistRecords() {
-    try {
-      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records));
-      _recordsWriteWarned = false;
-      return true;
-    } catch (e) {
-      console.error('[Storage] records 写入失败:', e);
-      if (!_recordsWriteWarned && typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        _recordsWriteWarned = true;
-        try { showSnackbar('⚠️ 本地存储写入失败（空间可能已满），记录可能无法保存'); } catch (_) {}
+    const tryWrite = () => {
+      try { localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records)); return true; }
+      catch (e) { return false; }
+    };
+    if (tryWrite()) { _recordsWriteWarned = false; return true; }
+    // 配额失败：逐级清理早期历史后重试（180 天 → 90 天）
+    for (const days of RECORDS_EMERGENCY_DAYS) {
+      const n = _pruneRecordsOlderThan(records, days);
+      if (n > 0 && tryWrite()) {
+        try {
+          showSnackbar(`存储空间不足，已清理 ${n} 天早期历史后保存成功`);
+          if (typeof renderAll === 'function') renderAll(true);
+        } catch (e) {}
+        return true;
       }
-      return false;
     }
+    console.error('[Storage] records 写入失败（配额不足且清理后仍失败）');
+    if (!_recordsWriteWarned && typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      _recordsWriteWarned = true;
+      try { showSnackbar('⚠️ 本地存储写入失败（空间已满且清理无效），本次记录可能无法保存'); } catch (_) {}
+    }
+    return false;
   }
 
   // saveRecords 走 debounce(150ms) + 空闲时写盘
@@ -1440,6 +1578,13 @@
     const now = getNow();
     const hourStr = getGMTHourString(now);
     const date = getTodayDate();
+
+    // 保护：正在查看历史日期时，一键打卡仍会写“今天”的数据，
+    // 但表格显示的是历史日期 → 用户会误以为刚打的卡消失了。明确拦截并引导返回今天。
+    if (typeof currentDate === 'string' && currentDate !== date) {
+      showSnackbar(`正在查看历史日期 ${currentDate}，请先点击顶部日期返回今天后再打卡`);
+      return;
+    }
 
     const access = getHourAccessState(date, hourStr, now.getTime());
     if (access === 'future') {
